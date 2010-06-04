@@ -18,13 +18,16 @@ Rails::Initializer.run do |config|
   #   in a file, for reuse between server restarts. If you want to
   #   change the key, just delete the file, and it will be regenerated
   #   on the next restart. Doing so will invalitate all existing sessions.
-  secret_file = Rails.root.join("secret")  
-  if File.exist?(secret_file)  
-    secret = secret_file.read  
-  else  
-    secret =  ActiveSupport::SecureRandom.hex(64)
-    File.open(secret_file, 'w', 0600) { |f| f.write(secret) }  
-  end  
+  if (ENV.has_key? 'INSTIKI_SECRET')
+    if (ENV.has_key? 'INSTIKI_SALT')
+      secret = Digest::SHA512.hexdigest(('NaCl' + ENV['INSTIKI_SECRET'] +
+                                         ENV['INSTIKI_SALT']).reverse)
+    end
+  end
+  unless secret
+    secret = ActiveSupport::SecureRandom.hex(64)
+  end
+
   config.action_controller.session = { 
     :key => "instiki_session",
     :secret => secret
