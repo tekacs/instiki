@@ -10,6 +10,7 @@ $:.unshift(File.join(File.dirname(__FILE__), '..', 'vendor', 'plugins', 'rexml',
 require File.join(File.dirname(__FILE__), 'boot')
 
 require 'active_support/secure_random'
+require 'digest'
 
 Rails::Initializer.run do |config|
 
