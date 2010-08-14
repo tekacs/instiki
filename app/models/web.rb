@@ -9,7 +9,6 @@ class Web < ActiveRecord::Base
   ## Hooks
 
   before_save :sanitize_markup
-  after_save :create_files_directory
 
   before_validation :validate_address
 
@@ -140,33 +139,6 @@ class Web < ActiveRecord::Base
   # @return [String] uses the +address+ attribute for this record's parameter name
   def to_param
     address
-  end
-
-  # Called by an +after_save+ hook. Creates the directory that houses this 
-  # Web's associated files.
-  #
-  # TODO Move this into the WikiFile model
-  def create_files_directory
-    return unless allow_uploads == 1
-
-    dummy_file = wiki_files.build(
-      :file_name   => "0",
-      :description => "0",
-      :content     => "0"
-    )
-
-    File.umask(0002)
-
-    begin
-      dummy_file.content_path.parent.mkpath
-      dummy_file.save
-      dummy_file.destroy
-    rescue => e
-      logger.error "Failed create files directory for #{address}: #{e}"
-      raise "Instiki could not create directory to store uploaded files. " +
-            "Please make sure that Instiki is allowed to create directory " +
-            "#{dummy_file.content_path.expand_path} and add files to it."
-    end
   end
 
   # @return [Pathname] the path to the files for this record
