@@ -12,6 +12,14 @@ require File.join(File.dirname(__FILE__), 'boot')
 require 'active_support/secure_random'
 require 'digest'
 
+require 'uri'
+require 'mongo'
+
+uri = URI.parse(ENV['MONGOHQ_URL'])
+conn = Mongo::Connection.from_uri(ENV['MONGOHQ_URL'])
+db = conn.db(uri.path.gsub(/^\//, ''))
+GFS = GridFileSystem.new(db)
+
 Rails::Initializer.run do |config|
 
   # Secret session key

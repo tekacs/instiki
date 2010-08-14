@@ -42,7 +42,7 @@ class WikiFile < ActiveRecord::Base
   end
   
   def content
-    @content ||= ( File.open(content_path, 'rb') { |f| f.read } )
+    @content ||= ( GFS.open(content_path, 'rb') { |f| f.read } )
   end
   
   def content_path
@@ -51,12 +51,14 @@ class WikiFile < ActiveRecord::Base
   
   def write_content_to_file
     web.create_files_directory unless File.exists?(web.files_path)
-    File.open(self.content_path, 'wb') { |f| f.write(@content) }
+    GFS.open(self.content_path, 'w', :delete_old => true) do |f|
+      f.write(@content)
+    end
   end
   
   def delete_content_file
     require 'fileutils'
-    FileUtils.rm_f(content_path) if File.exists?(content_path)
+    GFS.delete(content_path) if File.exists?(content_path)
   end
   
   
