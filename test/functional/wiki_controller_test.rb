@@ -10,7 +10,7 @@ require 'wiki_controller'
 require 'rexml/document'
 require 'tempfile'
 require 'zip/zipfilesystem'
-require 'stringsupport'
+require 'instiki_stringsupport'
 
 # Raise errors beyond the default web-based presentation
 class WikiController; def rescue_action(e) logger.error(e); raise e end; end
@@ -955,7 +955,7 @@ class WikiControllerTest < ActionController::TestCase
   end
 
   def test_recursive_include
-    @wiki.write_page('wiki1', 'HomePage', 'Self-include: [[!include HomePage]]', Time.now, 
+    @wiki.write_page('wiki1', 'HomePage', "Self-include:\n\n [[!include HomePage]] ", Time.now, 
         Author.new('AnotherAuthor', '127.0.0.2'), x_test_renderer)
 
     r = process('show', 'id' => 'HomePage', 'web' => 'wiki1')
@@ -1002,6 +1002,32 @@ class WikiControllerTest < ActionController::TestCase
 
     assert_response :success
     assert_match /<p>Nonrecursive-include:<\/p>\n\n<p>extra fun<\/p>\n\n<p><a class='existingWikiWord' href='\/wiki1\/show\/HomePage'>HomePage<\/a><\/p>/, r.body
+  end
+  
+  def test_divref
+    @wiki.write_page('wiki1', 'Bar',  "+-- \{: .num_lemma #Leftcosetsdisjoint\}\n###### Lem" +
+      "ma\nLet $H$ be a subgroup of a group $G$, and let $x$ and $y$ be elements\n of $G$" +
+      ". Suppose that $x H \\cap y H$ is non-empty. Then $x H = y H$.\n=--\n\n See Lemma \\" +
+      "ref\{Leftcosetsdisjoint\}.", Time.now, 
+        Author.new('AnotherAuthor', '127.0.0.2'), x_test_renderer)
+
+    r = process('show', 'id' => 'Bar', 'web' => 'wiki1')
+
+    assert_response :success
+    resp = %{<div class='num_lemma' id='Leftcosetsdisjoint'>\n<h6 id='lemma_1'>Lemma</h6>\n\n} +
+      %{<p>Let <math class='maruku-mathml' display='inline' xmlns='http://www.w3.org/1998/Mat} +
+      %{h/MathML'><mi>H</mi></math> be a subgroup of a group <math class='maruku-mathml' displ} +
+      %{ay='inline' xmlns='http://www.w3.org/1998/Math/MathML'><mi>G</mi></math>, and let <ma} +
+      %{th class='maruku-mathml' display='inline' xmlns='http://www.w3.org/1998/Math/MathML'>} +
+      %{<mi>x</mi></math> and <math class='maruku-mathml' display='inline' xmlns='http://www.} +
+      %{w3.org/1998/Math/MathML'><mi>y</mi></math> be elements of <math class='maruku-mathml'} +
+      %{ display='inline' xmlns='http://www.w3.org/1998/Math/MathML'><mi>G</mi></math>. Suppo} +
+      %{se that <math class='maruku-mathml' display='inline' xmlns='http://www.w3.org/1998/Ma} +
+      %{th/MathML'><mi>x</mi><mi>H</mi><mo>\342\210\251</mo><mi>y</mi><mi>H</mi></math> is no} +
+      %{n-empty. Then <math class='maruku-mathml' display='inline' xmlns='http://www.w3.org/1} +
+      %{998/Math/MathML'><mi>x</mi><mi>H</mi><mo>=</mo><mi>y</mi><mi>H</mi></math>.</p>\n</di} +
+      %{v>\n\n<p>See Lemma <a class='maruku-ref' href='#Leftcosetsdisjoint'>1</a>.</p>}
+    assert_match Regexp.new(resp), r.body
   end
   
   def test_show_page_nonexistant_page

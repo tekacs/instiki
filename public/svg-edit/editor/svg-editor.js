@@ -45,11 +45,13 @@
 				imgPath: 'images/',
 				langPath: 'locale/',
 				extPath: 'extensions/',
-				extensions: ['ext-markers.js','ext-connector.js', 'ext-eyedropper.js', 'ext-itex.js'],
+				jGraduatePath: 'jgraduate/images/',
+				extensions: ['ext-markers.js','ext-connector.js', 'ext-eyedropper.js', 'ext-imagelib.js', 'ext-itex.js'],
 				initTool: 'select',
-				wireframe: false
+				wireframe: false,
+				colorPickerCSS: null
 			},
-			uiStrings = {
+			uiStrings = Editor.uiStrings = {
 			"invalidAttrValGiven":"Invalid value given",
 			"noContentToFitTo":"No content to fit to",
 			"layer":"Layer",
@@ -78,7 +80,11 @@
 		
 		var curPrefs = {}; //$.extend({}, defaultPrefs);
 		
+		var customHandlers = {};
+		
 		Editor.curConfig = curConfig;
+		
+		Editor.tool_scale = 1;
 		
 		// Store and retrieve preferences
 		$.pref = function(key, val) {
@@ -143,14 +149,21 @@
 		//	- invoke a file chooser dialog in 'save' mode
 		// 	- save the file to location chosen by the user
 		Editor.setCustomHandlers = function(opts) {
-			if(opts.open) {
-				$('#tool_open').show();
-				svgCanvas.open = opts.open;
-			}
-			if(opts.save) {
-				show_save_warning = false;
-				svgCanvas.bind("saved", opts.save);
-			}
+			Editor.ready(function() {
+				if(opts.open) {
+					$('#tool_open > input[type="file"]').remove();
+					$('#tool_open').show();
+					svgCanvas.open = opts.open;
+				}
+				if(opts.save) {
+					show_save_warning = false;
+					svgCanvas.bind("saved", opts.save);
+				}
+				if(opts.pngsave) {
+					svgCanvas.bind("exported", opts.pngsave);
+				}
+				customHandlers = opts;
+			});
 		}
 		
 		Editor.randomizeIds = function() {
@@ -173,16 +186,13 @@
 					if(urldata.bkgd_color) {
 						urldata.bkgd_color = '#' + urldata.bkgd_color;
 					}
-					
-					if(urldata.bkgd_color) {
-						urldata.bkgd_color = '#' + urldata.bkgd_color;
-					}
 
 					svgEditor.setConfig(urldata);
 					
+					// FIXME: This is null if Data URL ends with '='. 
 					var src = urldata.source;
 					var qstr = $.param.querystring();
-					
+
 					if(src) {
 						if(src.indexOf("data:") === 0) {
 							// plusses get replaced by spaces, so re-insert
@@ -202,7 +212,15 @@
 			
 			var extFunc = function() {
 				$.each(curConfig.extensions, function() {
-					$.getScript(curConfig.extPath + this);
+					var extname = this;
+					$.getScript(curConfig.extPath + extname, function(d) {
+						// Fails locally in Chrome 5
+						if(!d) {
+							var s = document.createElement('script');
+							s.src = curConfig.extPath + extname;
+							document.querySelector('head').appendChild(s);
+						}
+					});
 				});
 			}
 			
@@ -315,6 +333,7 @@
 					'#tool_reorient':'reorient',
 					'#tool_group':'group',
 					'#tool_ungroup':'ungroup',
+					'#tool_unlink_use':'unlink_use',
 					
 					'#tool_alignleft, #tool_posleft':'align_left',
 					'#tool_aligncenter, #tool_poscenter':'align_center',
@@ -372,16 +391,17 @@
 						$(this).parent().prepend(this);
 					});
 					
-					// Use small icons by default if not all left tools are visible
 					var tleft = $('#tools_left');
-					var min_height = tleft.offset().top + tleft.outerHeight();
-					var size = $.pref('iconsize');
-					if(size && size != 'm') {
-						svgEditor.setIconSize(size);				
-					} else if($(window).height() < min_height) {
-						// Make smaller
-						svgEditor.setIconSize('s');
+					if (tleft.length != 0) {
+						var min_height = tleft.offset().top + tleft.outerHeight();
 					}
+// 					var size = $.pref('iconsize');
+// 					if(size && size != 'm') {
+// 						svgEditor.setIconSize(size);				
+// 					} else if($(window).height() < min_height) {
+// 						// Make smaller
+// 						svgEditor.setIconSize('s');
+// 					}
 					
 					// Look for any missing flyout icons from plugins
 					$('.tools_flyout').each(function() {
@@ -390,8 +410,10 @@
 						// Check if there's an icon here
 						if(!shower.children('svg, img').length) {
 							var clone = $(sel).children().clone();
-							clone[0].removeAttribute('style'); //Needed for Opera
-							shower.append(clone);
+							if(clone.length) {
+								clone[0].removeAttribute('style'); //Needed for Opera
+								shower.append(clone);
+							}
 						}
 					});
 					
@@ -416,10 +438,13 @@
 				isMac = false, //(navigator.platform.indexOf("Mac") != -1);
 				modKey = "", //(isMac ? "meta+" : "ctrl+");
 				path = svgCanvas.pathActions,
+				undoMgr = svgCanvas.undoMgr,
+				Utils = svgCanvas.Utils,
 				default_img_url = curConfig.imgPath + "logo.png",
 				workarea = $("#workarea"),
 				show_save_warning = false, 
-				exportWindow = null;
+				exportWindow = null, 
+				tool_scale = 1;
 
 			// This sets up alternative dialog boxes. They mostly work the same way as
 			// their UI counterparts, expect instead of returning the result, a callback
@@ -448,6 +473,10 @@
 						input.val(defText || '');
 						input.bind('keydown', 'return', function() {ok.click();});
 					}
+					
+					if(type == 'process') {
+						ok.hide();
+					}
 		
 					box.show();
 					
@@ -462,6 +491,7 @@
 				
 				$.alert = function(msg, cb) { dbox('alert', msg, cb);};
 				$.confirm = function(msg, cb) {	dbox('confirm', msg, cb);};
+				$.process_cancel = function(msg, cb) {	dbox('process', msg, cb);};
 				$.prompt = function(msg, txt, cb) { dbox('prompt', msg, cb, txt);};
 			}());
 			
@@ -505,7 +535,7 @@
 			
 				// by default, we add the XML prolog back, systems integrating SVG-edit (wikis, CMSs) 
 				// can just provide their own custom save handler and might not want the XML prolog
-				svg = "<?xml version='1.0'?>\n" + svg;
+				svg = '<?xml version="1.0"?>\n' + svg;
 				
 				// Opens the SVG in new window, with warning about Mozilla bug #308590 when applicable
 				
@@ -550,15 +580,21 @@
 				var datauri = c.toDataURL('image/png');
 				exportWindow.location.href = datauri;
 				
-				var note = uiStrings.saveFromBrowser.replace('%s', 'PNG');
-				
-				// Check if there's issues
-
-				if(issues.length) {
-					var pre = "\n \u2022 ";
-					note += ("\n\n" + uiStrings.noteTheseIssues + pre + issues.join(pre));
-				} 
-				exportWindow.alert(note);
+				var done = $.pref('export_notice_done');
+				if(done !== "all") {
+					var note = uiStrings.saveFromBrowser.replace('%s', 'PNG');
+					
+					// Check if there's issues
+					if(issues.length) {
+						var pre = "\n \u2022 ";
+						note += ("\n\n" + uiStrings.noteTheseIssues + pre + issues.join(pre));
+					} 
+					
+					// Note that this will also prevent the notice even though new issues may appear later.
+					// May want to find a way to deal with that without annoying the user
+					$.pref('export_notice_done', 'all'); 
+					exportWindow.alert(note);
+				}
 			};
 			
 			// called when we've selected a different element
@@ -602,8 +638,8 @@
 					} 
 					// Update selectedElement if element is no longer part of the image.
 					// This occurs for the text elements in Firefox
-					else if(elem && selectedElement && selectedElement.parentNode == null
-						|| elem && elem.tagName == "path") {
+					else if(elem && selectedElement && selectedElement.parentNode == null) {
+// 						|| elem && elem.tagName == "path" && !multiselected) { // This was added in r1430, but not sure why
 						selectedElement = elem;
 					}
 				}
@@ -655,6 +691,7 @@
 				$.each(holders, function(hold_sel, btn_opts) {
 					var buttons = $(hold_sel).children();
 					var show_sel = hold_sel + '_show';
+					var shower = $(show_sel);
 					var def = false;
 					buttons.addClass('tool_button')
 						.unbind('click mousedown mouseup') // may not be necessary
@@ -681,7 +718,6 @@
 									var icon = $(opts.sel).children().eq(0).clone();
 								}
 								
-								var shower = $(show_sel);
 								icon[0].setAttribute('width',shower.width());
 								icon[0].setAttribute('height',shower.height());
 								shower.children(':not(.flyout_arrow_horiz)').remove();
@@ -696,33 +732,42 @@
 						});
 					
 					if(def) {
-						$(show_sel).attr('data-curopt', btn_opts[def].sel);
-					} else if(!$(show_sel).attr('data-curopt')) {
+						shower.attr('data-curopt', btn_opts[def].sel);
+					} else if(!shower.attr('data-curopt')) {
 						// Set first as default
-						$(show_sel).attr('data-curopt', btn_opts[0].sel);
+						shower.attr('data-curopt', btn_opts[0].sel);
 					}
 					
 					var timer;
 					
 					// Clicking the "show" icon should set the current mode
-					$(show_sel).mousedown(function(evt) {
-						if($(show_sel).hasClass('disabled')) return false;
+					shower.mousedown(function(evt) {
+						if(shower.hasClass('disabled')) return false;
 						var holder = $(show_sel.replace('_show',''));
 						var l = holder.css('left');
 						var w = holder.width()*-1;
 						var time = holder.data('shown_popop')?200:0;
 						timer = setTimeout(function() {
 							// Show corresponding menu
-							holder.css('left', w).show().animate({
-								left: l
-							},150);
+							if(!shower.data('isLibrary')) {
+								holder.css('left', w).show().animate({
+									left: l
+								},150);
+							} else {
+								holder.css('left', l).show();
+							}
 							holder.data('shown_popop',true);
 						},time);
 						evt.preventDefault();
-					}).mouseup(function() {
+					}).mouseup(function(evt) {
 						clearTimeout(timer);
 						var opt = $(this).attr('data-curopt');
-						if (toolButtonClick(show_sel)) {
+						// Is library and popped up, so do nothing
+						if(shower.data('isLibrary') && $(show_sel.replace('_show','')).is(':visible')) {
+							toolButtonClick(show_sel, true);
+							return;
+						}
+						if (toolButtonClick(show_sel) && (opt in flyout_funcs)) {
 							flyout_funcs[opt]();
 						}
 					});
@@ -750,7 +795,7 @@
 					var shower = $('#' + this.id + '_show');
 					var pos = shower.offset();
 					var w = shower.outerWidth();
-					$(this).css({left: pos.left + w, top: pos.top});
+					$(this).css({left: (pos.left + w)*tool_scale, top: pos.top});
 				});
 			}
 			
@@ -764,13 +809,31 @@
 					shower[0].title = tooltips.join(' / ');
 				});
 			}
+
+			var resize_timer;			
 			
 			var extAdded = function(window, ext) {
 		
 				var cb_called = false;
+				var resize_done = false;
+				var cb_ready = true; // Set to false to delay callback (e.g. wait for $.svgIcons)
+				
+				function prepResize() {
+					if(resize_timer) {
+						clearTimeout(resize_timer);
+						resize_timer = null;
+					}
+					if(!resize_done) {
+						resize_timer = setTimeout(function() {
+							resize_done = true;
+							setIconSize(curPrefs.iconsize);
+						}, 50);	
+					}
+				}
+
 				
 				var runCallback = function() {
-					if(ext.callback && !cb_called) {
+					if(ext.callback && !cb_called && cb_ready) {
 						cb_called = true;
 						ext.callback();
 					}
@@ -820,6 +883,10 @@
 								+ '<div id="cur_' + tool.id + '" class="icon_label"></div><button></button></div>';
 							
 							var list = $('<ul id="' + tool.id + '_opts"></ul>').appendTo('#option_lists');
+							
+							if(tool.colnum) {
+								list.addClass('optcols' + tool.colnum);
+							}
 							
 							// Creates the tool, hides & adds it, returns the select element
 							var dropdown = $(html).appendTo(panel).children();
@@ -885,13 +952,18 @@
 						} else {
 							fallback_obj[id] = btn.icon;
 							var svgicon = btn.svgicon?btn.svgicon:btn.id;
-							placement_obj['#' + id] = svgicon;
+							if(btn.type == 'app_menu') {
+								placement_obj['#' + id + ' > div'] = svgicon;
+							} else {
+								placement_obj['#' + id] = svgicon;
+							}
 						}
 						
 						var cls, parent;
 						
 						// Set button up according to its type
 						switch ( btn.type ) {
+						case 'mode_flyout':
 						case 'mode':
 							cls = 'tool_button';
 							parent = "#tools_left";
@@ -903,14 +975,78 @@
 							if(!$(parent).length)
 								$('<div>', {id: btn.panel}).appendTo("#tools_top");
 							break;
+						case 'app_menu':
+							cls = '';
+							parent = '#main_menu ul';
+							break;
 						}
 						
-						var button = $(btn.list?'<li/>':'<div/>')
+						var button = $((btn.list || btn.type == 'app_menu')?'<li/>':'<div/>')
 							.attr("id", id)
 							.attr("title", btn.title)
 							.addClass(cls);
 						if(!btn.includeWith && !btn.list) {
-							button.appendTo(parent);
+							if("position" in btn) {
+								$(parent).children().eq(btn.position).before(button);
+							} else {
+								button.appendTo(parent);
+							}
+
+							if(btn.type =='mode_flyout') {
+							// Add to flyout menu / make flyout menu
+	// 							var opts = btn.includeWith;
+	// 							// opts.button, default, position
+								var ref_btn = $(button);
+								
+								var flyout_holder = ref_btn.parent();
+								// Create a flyout menu if there isn't one already
+								if(!ref_btn.parent().hasClass('tools_flyout')) {
+									// Create flyout placeholder
+									var tls_id = ref_btn[0].id.replace('tool_','tools_')
+									var show_btn = ref_btn.clone()
+										.attr('id',tls_id + '_show')
+										.append($('<div>',{'class':'flyout_arrow_horiz'}));
+										
+									ref_btn.before(show_btn);
+								
+									// Create a flyout div
+									flyout_holder = makeFlyoutHolder(tls_id, ref_btn);
+									flyout_holder.data('isLibrary', true);
+									show_btn.data('isLibrary', true);
+								} 
+								
+								
+								
+	// 							var ref_data = Actions.getButtonData(opts.button);
+								
+								placement_obj['#' + tls_id + '_show'] = btn.id;
+								// TODO: Find way to set the current icon using the iconloader if this is not default
+								
+								// Include data for extension button as well as ref button
+								var cur_h = holders['#'+flyout_holder[0].id] = [{
+									sel: '#'+id,
+									fn: btn.events.click,
+									icon: btn.id,
+// 									key: btn.key,
+									isDefault: true
+								}, ref_data];
+	// 							
+	// 							// {sel:'#tool_rect', fn: clickRect, evt: 'mouseup', key: 4, parent: '#tools_rect', icon: 'rect'}
+	// 								
+	// 							var pos  = ("position" in opts)?opts.position:'last';
+	// 							var len = flyout_holder.children().length;
+	// 							
+	// 							// Add at given position or end
+	// 							if(!isNaN(pos) && pos >= 0 && pos < len) {
+	// 								flyout_holder.children().eq(pos).before(button);
+	// 							} else {
+	// 								flyout_holder.append(button);
+	// 								cur_h.reverse();
+	// 							}
+							} else if(btn.type == 'app_menu') {
+								button.append('<div>').append(btn.title);
+							}
+							
 						} else if(btn.list) {
 							// Add button to list
 							button.addClass('push_button');
@@ -930,8 +1066,6 @@
 							// Create a flyout menu if there isn't one already
 							if(!ref_btn.parent().hasClass('tools_flyout')) {
 								// Create flyout placeholder
-								var arr_div = $('<div>',{id:'flyout_arrow_horiz'})
-								
 								var tls_id = ref_btn[0].id.replace('tool_','tools_')
 								var show_btn = ref_btn.clone()
 									.attr('id',tls_id + '_show')
@@ -971,7 +1105,7 @@
 								flyout_holder.append(button);
 								cur_h.reverse();
 							}
-						}
+						} 
 						
 						if(!svgicons) {
 							button.append(icon);
@@ -1010,8 +1144,10 @@
 					$.each(btn_selects, function() {
 						addAltDropDown(this.elem, this.list, this.callback, {seticon: true}); 
 					});
-
 					
+					if (svgicons)
+						cb_ready = false; // Delay callback
+
 					$.svgIcons(svgicons, {
 						w:24, h:24,
 						id_match: false,
@@ -1021,8 +1157,9 @@
 						callback: function(icons) {
 							// Non-ideal hack to make the icon match the current size
 							if(curPrefs.iconsize && curPrefs.iconsize != 'm') {
-								setIconSize(curPrefs.iconsize, true);
+								prepResize();
 							}
+							cb_ready = true; // Ready for callback
 							runCallback();
 						}
 				
@@ -1058,7 +1195,8 @@
 			// updates the toolbar (colors, opacity, etc) based on the selected element
 			// This function also updates the opacity and id elements that are in the context panel
 			var updateToolbar = function() {
-				if (selectedElement != null && $.inArray(selectedElement.tagName, ['image', 'text', 'foreignObject', 'g', 'a']) === -1) {
+				if (selectedElement != null && $.inArray(selectedElement.tagName, ['use', 'image', 'foreignObject', 'g', 'a']) === -1) {
+				
 					// get opacity values
 					var fillOpacity = parseFloat(selectedElement.getAttribute("fill-opacity"));
 					if (isNaN(fillOpacity)) {
@@ -1073,14 +1211,14 @@
 					// update fill color and opacity
 					var fillColor = selectedElement.getAttribute("fill")||"black";
 					// prevent undo on these canvas changes
-					svgCanvas.setFillColor(fillColor, true);
-					svgCanvas.setFillOpacity(fillOpacity, true);
+					svgCanvas.setColor('fill', fillColor, true);
+					svgCanvas.setPaintOpacity('fill', fillOpacity, true);
 		
 					// update stroke color and opacity
 					var strokeColor = selectedElement.getAttribute("stroke")||"none";
 					// prevent undo on these canvas changes
-					svgCanvas.setStrokeColor(strokeColor, true);
-					svgCanvas.setStrokeOpacity(strokeOpacity, true);
+					svgCanvas.setColor('stroke', strokeColor, true);
+					svgCanvas.setPaintOpacity('stroke', strokeOpacity, true);
 		
 					// update the rect inside #fill_color
 					$("#stroke_color rect").attr({
@@ -1112,16 +1250,18 @@
 						strokeOpacity = "N/A";
 					}
 					
-					$('#stroke_width').val(selectedElement.getAttribute("stroke-width")||1);
-					$('#stroke_style').val(selectedElement.getAttribute("stroke-dasharray")||"none");
+					$('#stroke_width').val(selectedElement.getAttribute("stroke-width")||1).change();
+					$('#stroke_style').val(selectedElement.getAttribute("stroke-dasharray")||"none").change();
 
 					var attr = selectedElement.getAttribute("stroke-linejoin") || 'miter';
 					
-					setStrokeOpt($('#linejoin_' + attr)[0]);
+					if ($('#linejoin_' + attr).length != 0)
+						setStrokeOpt($('#linejoin_' + attr)[0]);
 					
 					attr = selectedElement.getAttribute("stroke-linecap") || 'butt';
 					
-					setStrokeOpt($('#linecap_' + attr)[0]);
+					if ($('#linecap_' + attr).length != 0)
+						setStrokeOpt($('#linecap_' + attr)[0]);
 
 				}
 				
@@ -1135,6 +1275,38 @@
 				
 				updateToolButtonState();
 			};
+		
+			var setImageURL = Editor.setImageURL = function(url) {
+				if(!url) url = default_img_url;
+				
+				svgCanvas.setImageURL(url);
+				$('#image_url').val(url);
+				
+				if(url.indexOf('data:') === 0) {
+					// data URI found
+					$('#image_url').hide();
+					$('#change_image_url').show();
+				} else {
+					// regular URL
+					
+					svgCanvas.embedImage(url, function(datauri) {
+						if(!datauri) {
+							// Couldn't embed, so show warning
+							$('#url_notice').show();
+						} else {
+							$('#url_notice').hide();
+						}
+						default_img_url = url;
+					});
+					$('#image_url').show();
+					$('#change_image_url').hide();
+				}
+			}
+		
+			var setInputWidth = function(elem) {
+				var w = Math.min(Math.max(12 + elem.value.length * 6, 50), 300);
+				$(elem).width(w);
+			}
 		
 			// updates the context panel tools based on the selected element
 			var updateContextPanel = function() {
@@ -1152,7 +1324,7 @@
 				}
 				var is_node = currentMode == 'pathedit'; //elem ? (elem.id && elem.id.indexOf('pathpointgrip') == 0) : false;
 				$('#selected_panel, #multiselected_panel, #g_panel, #rect_panel, #circle_panel,\
-					#ellipse_panel, #line_panel, #text_panel, #image_panel').hide();
+					#ellipse_panel, #line_panel, #text_panel, #image_panel, #container_panel, #use_panel').hide();
 				if (elem != null) {
 					var elname = elem.nodeName;
 					
@@ -1173,7 +1345,12 @@
 					
 					if(svgCanvas.addedNew) {
 						if(elname == 'image') {
-							promptImgURL();
+							var xlinkNS = "http://www.w3.org/1999/xlink";
+							var href = elem.getAttributeNS(xlinkNS, "href");
+							// Prompt for URL if not a data URL
+							if(href.indexOf('data:') !== 0) {
+								promptImgURL();
+							}
 						} else if(elname == 'text') {
 							// TODO: Do something here for new text
 						}
@@ -1236,10 +1413,15 @@
 						circle: ['cx','cy','r'],
 						ellipse: ['cx','cy','rx','ry'],
 						line: ['x1','y1','x2','y2'], 
-						text: []
+						text: [],
+						'use': []
 					};
 					
 					var el_name = elem.tagName;
+					
+// 					if($(elem).data('gsvg')) {
+// 						$('#g_panel').show();
+// 					}
 					
 					if(panels[el_name]) {
 						var cur_panel = panels[el_name];
@@ -1277,6 +1459,19 @@
 							var href = elem.getAttributeNS(xlinkNS, "href");
 							setImageURL(href);
 						} // image
+						else if(el_name == 'g' || el_name == 'use') {
+							$('#container_panel').show();
+							var title = svgCanvas.getTitle();
+							var label = $('#g_title')[0];
+							label.value = title;
+							setInputWidth(label);
+							var d = 'disabled';
+							if(el_name == 'use') {
+								label.setAttribute(d, d);
+							} else {
+								label.removeAttribute(d);
+							}
+						}
 					}
 				} // if (elem != null)
 				else if (multiselected) {
@@ -1284,13 +1479,13 @@
 				}
 				
 				// update history buttons
-				if (svgCanvas.getUndoStackSize() > 0) {
+				if (undoMgr.getUndoStackSize() > 0) {
 					$('#tool_undo').removeClass( 'disabled');
 				}
 				else {
 					$('#tool_undo').addClass( 'disabled');
 				}
-				if (svgCanvas.getRedoStackSize() > 0) {
+				if (undoMgr.getRedoStackSize() > 0) {
 					$('#tool_redo').removeClass( 'disabled');
 				}
 				else {
@@ -1471,6 +1666,12 @@
 			$('#image_url').change(function(){
 				setImageURL(this.value); 
 			});
+			
+			$('#g_title').change(function() {
+				svgCanvas.setGroupTitle(this.value);
+				setInputWidth(this);
+
+			});
 		
 			$('.attr_changer').change(function() {
 				var attr = this.getAttribute("data-attr");
@@ -1523,19 +1724,19 @@
 				
 				if (evt.shiftKey) {
 					strokePaint = paint;
-					if (svgCanvas.getStrokeColor() != color) {
-						svgCanvas.setStrokeColor(color);
+					if (svgCanvas.getColor('stroke') != color) {
+						svgCanvas.setColor('stroke', color);
 					}
 					if (color != 'none' && svgCanvas.getStrokeOpacity() != 1) {
-						svgCanvas.setStrokeOpacity(1.0);
+						svgCanvas.setPaintOpacity('stroke', 1.0);
 					}
 				} else {
 					fillPaint = paint;
-					if (svgCanvas.getFillColor() != color) {
-						svgCanvas.setFillColor(color);
+					if (svgCanvas.getColor('fill') != color) {
+						svgCanvas.setColor('fill', color);
 					}
-					if (color != 'none' && svgCanvas.getFillOpacity() != 1) {
-						svgCanvas.setFillOpacity(1.0);
+					if (color != 'none' && svgCanvas.getFillOpacity('fill') != 1) {
+						svgCanvas.setPaintOpacity('fill', 1.0);
 					}
 				}
 				updateToolButtonState();
@@ -1554,11 +1755,13 @@
 			// - removes the tool_button_current class from whatever tool currently has it
 			// - hides any flyouts
 			// - adds the tool_button_current class to the button passed in
-			var toolButtonClick = function(button, fadeFlyouts) {
+			var toolButtonClick = function(button, noHiding) {
 				if ($(button).hasClass('disabled')) return false;
 				if($(button).parent().hasClass('tools_flyout')) return true;
 				var fadeFlyouts = fadeFlyouts || 'normal';
-				$('.tools_flyout').fadeOut(fadeFlyouts);
+				if(!noHiding) {
+					$('.tools_flyout').fadeOut(fadeFlyouts);
+				}
 				$('#styleoverrides').text('');
 				$('.tool_button_current').removeClass('tool_button_current').addClass('tool_button');
 				$(button).addClass('tool_button_current').removeClass('tool_button');
@@ -1637,7 +1840,7 @@
 						button.removeClass('buttondown');
 						// do not hide if it was the file input as that input needs to be visible 
 						// for its change event to fire
-						if (evt.target.localName != "input") {
+						if (evt.target.tagName != "INPUT") {
 							list.fadeOut(200);
 						} else if(!set_click) {
 							set_click = true;
@@ -1647,8 +1850,9 @@
 						}
 					}
 					on_button = false;
-				}).mousedown(function() {
-					$('.tools_flyout:visible').fadeOut();
+				}).mousedown(function(evt) {
+					var islib = $(evt.target).closest('div.tools_flyout').length;
+					if(!islib) $('.tools_flyout:visible').fadeOut();
 				});
 				
 				overlay.bind('mousedown',function() {
@@ -1692,8 +1896,9 @@
 					}
 				});
 			}());
-			
-			var addDropDown = function(elem, callback, dropUp) {
+			// Made public for UI customization.
+			// TODO: Group UI functions into a public svgEditor.ui interface.
+			Editor.addDropDown = function(elem, callback, dropUp) {
 				var button = $(elem).find('button');
 				var list = $(elem).find('ul');
 				var on_button = false;
@@ -1789,12 +1994,12 @@
 				}
 			}
 			
-			addDropDown('#font_family_dropdown', function() {
+			Editor.addDropDown('#font_family_dropdown', function() {
 				var fam = $(this).text();
 				$('#font_family').val($(this).text()).change();
 			});
 			
-			addDropDown('#opacity_dropdown', function() {
+			Editor.addDropDown('#opacity_dropdown', function() {
 				if($(this).find('div').length) return;
 				var perc = parseInt($(this).text().split('%')[0]);
 				changeOpacity(false, perc);
@@ -1814,7 +2019,7 @@
 				}
 			});
 		
-			addDropDown('#blur_dropdown', function() {
+			Editor.addDropDown('#blur_dropdown', function() {
 			});
 			
 			var slideStart = false;
@@ -1837,7 +2042,7 @@
 			});
 
 		
-			addDropDown('#zoom_dropdown', function() {
+			Editor.addDropDown('#zoom_dropdown', function() {
 				var item = $(this);
 				var val = item.attr('data-val');
 				if(val) {
@@ -1891,6 +2096,11 @@
 					workarea.mousedown(unfocus);
 				}).blur(function() {
 					workarea.unbind('mousedown', unfocus);
+					
+					// Go back to selecting text if in textedit mode
+					if(svgCanvas.getMode() == 'textedit') {
+						$('#text').focus();
+					}
 				});
 			}());
 
@@ -1914,27 +2124,39 @@
 			};
 		
 			var clickSquare = function(){
-				svgCanvas.setMode('square');
+				if (toolButtonClick('#tool_square')) {
+					svgCanvas.setMode('square');
+				}
 			};
 			
 			var clickRect = function(){
-				svgCanvas.setMode('rect');
+				if (toolButtonClick('#tool_rect')) {
+					svgCanvas.setMode('rect');
+				}
 			};
 			
 			var clickFHRect = function(){
-				svgCanvas.setMode('fhrect');
+				if (toolButtonClick('#tool_fhrect')) {
+					svgCanvas.setMode('fhrect');
+				}
 			};
 			
 			var clickCircle = function(){
-				svgCanvas.setMode('circle');
+				if (toolButtonClick('#tool_circle')) {
+					svgCanvas.setMode('circle');
+				}
 			};
 		
 			var clickEllipse = function(){
-				svgCanvas.setMode('ellipse');
+				if (toolButtonClick('#tool_ellipse')) {
+					svgCanvas.setMode('ellipse');
+				}
 			};
 		
 			var clickFHEllipse = function(){
-				svgCanvas.setMode('fhellipse');
+				if (toolButtonClick('#tool_fhellipse')) {
+					svgCanvas.setMode('fhellipse');
+				}
 			};
 			
 			var clickImage = function(){
@@ -1986,7 +2208,7 @@
 					svgCanvas.moveToBottomSelectedElement();
 				}
 			};
-			
+
 			var convertToPath = function() {
 				if (selectedElement != null) {
 					svgCanvas.convertToPath();
@@ -2078,11 +2300,13 @@
 			var clickBold = function(){
 				svgCanvas.setBold( !svgCanvas.getBold() );
 				updateContextPanel();
+				return false;
 			};
 			
 			var clickItalic = function(){
 				svgCanvas.setItalic( !svgCanvas.getItalic() );
 				updateContextPanel();
+				return false;
 			};
 		
 			var clickSave = function(){
@@ -2096,8 +2320,10 @@
 			
 			var clickExport = function() {
 				// Open placeholder window (prevents popup)
-				var str = uiStrings.loadingImage;
-				exportWindow = window.open("data:text/html;charset=utf-8,<title>" + str + "<\/title><h1>" + str + "<\/h1>");
+				if(!customHandlers.pngsave)  {
+					var str = uiStrings.loadingImage;
+					exportWindow = window.open("data:text/html;charset=utf-8,<title>" + str + "<\/title><h1>" + str + "<\/h1>");
+				}
 
 				if(window.canvg) {
 					svgCanvas.rasterExport();
@@ -2120,15 +2346,15 @@
 			};
 		
 			var clickUndo = function(){
-				if (svgCanvas.getUndoStackSize() > 0) {
-					svgCanvas.undo();
+				if (undoMgr.getUndoStackSize() > 0) {
+					undoMgr.undo();
 					populateLayers();
 				}
 			};
 		
 			var clickRedo = function(){
-				if (svgCanvas.getRedoStackSize() > 0) {
-					svgCanvas.redo();
+				if (undoMgr.getRedoStackSize() > 0) {
+					undoMgr.redo();
 					populateLayers();
 				}
 			};
@@ -2139,7 +2365,7 @@
 					svgCanvas.groupSelectedElements();
 				}
 				// ungroup
-				else if(selectedElement && selectedElement.tagName == 'g'){
+				else if(selectedElement){
 					svgCanvas.ungroupSelectedElement();
 				}
 			};
@@ -2328,7 +2554,7 @@
 			};
 			
 			function setBackground(color, url) {
-				if(color == curPrefs.bkgd_color && url == curPrefs.bkgd_url) return;
+// 				if(color == curPrefs.bkgd_color && url == curPrefs.bkgd_url) return;
 				$.pref('bkgd_color', color);
 				$.pref('bkgd_url', url);
 				
@@ -2337,161 +2563,260 @@
 			}
 			
 			var setIcon = Editor.setIcon = function(elem, icon_id, forcedSize) {
-				var icon = (typeof icon_id == 'string') ? $.getSvgIcon(icon_id).clone() : icon_id.clone();
-				$(elem).empty().append(icon);
-				if(forcedSize) {
-					var obj = {};
-					obj[elem + ' .svg_icon'] = forcedSize;
-					$.resizeSvgIcons(obj);
-				} else {
-					var size = curPrefs.iconsize;
-					if(size && size !== 'm') {
-						var icon_sizes = { s:16, m:24, l:32, xl:48}, obj = {};
-						obj[elem + ' .svg_icon'] = icon_sizes[size];
-						$.resizeSvgIcons(obj);
-					}
+				var icon = (typeof icon_id == 'string') ? $.getSvgIcon(icon_id) : icon_id;
+				if(!icon) {
+					console.log('NOTE: Icon image missing: ' + icon_id);
+					return;
 				}
+				icon = icon.clone();
+				$(elem).empty().append(icon);
+// 				if(forcedSize) {
+// 					var obj = {};
+// 					obj[elem + ' .svg_icon'] = forcedSize;
+// 					$.resizeSvgIcons(obj);
+// 				} else {
+// 					var size = curPrefs.iconsize;
+// 					if(size && size !== 'm') {
+// 						var icon_sizes = { s:16, m:24, l:32, xl:48}, obj = {};
+// 						obj[elem + ' .svg_icon'] = icon_sizes[size];
+// 						$.resizeSvgIcons(obj);
+// 					}
+// 				}
 			}
 		
+			var ua_prefix;
+			(ua_prefix = function() {
+				var regex = /^(Moz|Webkit|Khtml|O|ms|Icab)(?=[A-Z])/;
+				var someScript = document.getElementsByTagName('script')[0];
+				for(var prop in someScript.style) {
+					if(regex.test(prop)) {
+						// test is faster than match, so it's better to perform
+						// that on the lot and match only when necessary
+						return prop.match(regex)[0];
+					}
+				}
+			
+				// Nothing found so far?
+				if('WebkitOpacity' in someScript.style) return 'Webkit';
+				if('KhtmlOpacity' in someScript.style) return 'Khtml';
+				
+				return '';
+			}());
+			
+			var scaleElements = function(elems, scale) {
+				var prefix = '-' + ua_prefix.toLowerCase() + '-';
+				
+				var sides = ['top', 'left', 'bottom', 'right'];
+			
+				elems.each(function() {
+// 					console.log('go', scale);
+
+					// Handled in CSS
+					// this.style[ua_prefix + 'Transform'] = 'scale(' + scale + ')';
+				
+					var el = $(this);
+					
+					var w = el.outerWidth() * (scale - 1);
+					var h = el.outerHeight() * (scale - 1);
+					var margins = {};
+					
+					for(var i = 0; i < 4; i++) {
+						var s = sides[i];
+						
+						var cur = el.data('orig_margin-' + s);
+						if(cur == null) {
+							cur = parseInt(el.css('margin-' + s));
+							// Cache the original margin
+							el.data('orig_margin-' + s, cur);
+						}
+						var val = cur * scale;
+						if(s === 'right') {
+							val += w;
+						} else if(s === 'bottom') {
+							val += h;
+						}
+						
+						el.css('margin-' + s, val);
+// 						el.css('outline', '1px solid red');
+					}
+				});
+			}
+			
 			var setIconSize = Editor.setIconSize = function(size, force) {
 				if(size == curPrefs.size && !force) return;
+// 				return;
+// 				var elems = $('.tool_button, .push_button, .tool_button_current, .disabled, .icon_label, #url_notice, #tool_open');
+				console.log('size', size);
+				
+				var sel_toscale = '#tools_top .toolset, #editor_panel > *, #history_panel > *,\
+				#main_button, #tools_left > *, #path_node_panel > *, #multiselected_panel > *,\
+				#g_panel > *, #tool_font_size > *, .tools_flyout';
+				
+				var elems = $(sel_toscale);
+				
+				var scale = 1;
+				
+				if(typeof size == 'number') {
+					scale = size;
+				} else {
+					var icon_sizes = { s:.75, m:1, l:1.25, xl:1.5 };
+					scale = icon_sizes[size];
+				}
+				
+				Editor.tool_scale = tool_scale = scale;
+				
+				setFlyoutPositions();
+				// $('.tools_flyout').each(function() {
+// 					var pos = $(this).position();
+// 					console.log($(this),  pos.left+(34 * scale));
+// 					$(this).css({'left': pos.left+(34 * scale), 'top': pos.top+(77 * scale)});
+// 					console.log('l', $(this).css('left'));
+// 				});
+
+// 				var scale = .75;//0.75;
+				
+				var hidden_ps = elems.parents(':hidden');
+				hidden_ps.css('visibility', 'hidden').show();
+				scaleElements(elems, scale);
+				hidden_ps.css('visibility', 'visible').hide();
+// 				console.timeEnd('elems');								
+// 				return;
+				
 				$.pref('iconsize', size);
 				$('#iconsize').val(size);
-				var icon_sizes = { s:16, m:24, l:32, xl:48 };
-				var size_num = icon_sizes[size];
+				
 				
 				// Change icon size
-				$('.tool_button, .push_button, .tool_button_current, .disabled, .icon_label, #url_notice, #tool_open')
-				.find('> svg, > img').each(function() {
-					this.setAttribute('width',size_num);
-					this.setAttribute('height',size_num);
-				});
-				
-				$.resizeSvgIcons({
-					'.flyout_arrow_horiz > svg, .flyout_arrow_horiz > img': size_num / 5,
-					'#logo > svg, #logo > img': size_num * 1.3,
-					'#tools_bottom .icon_label > *': (size_num === 16 ? 18 : size_num * .75)
-				});
-				if(size != 's') {
-					$.resizeSvgIcons({'#layerbuttons svg, #layerbuttons img': size_num * .6});
-				}
+// 				$('.tool_button, .push_button, .tool_button_current, .disabled, .icon_label, #url_notice, #tool_open')
+// 				.find('> svg, > img').each(function() {
+// 					this.setAttribute('width',size_num);
+// 					this.setAttribute('height',size_num);
+// 				});
+// 				
+// 				$.resizeSvgIcons({
+// 					'.flyout_arrow_horiz > svg, .flyout_arrow_horiz > img': size_num / 5,
+// 					'#logo > svg, #logo > img': size_num * 1.3,
+// 					'#tools_bottom .icon_label > *': (size_num === 16 ? 18 : size_num * .75)
+// 				});
+// 				if(size != 's') {
+// 					$.resizeSvgIcons({'#layerbuttons svg, #layerbuttons img': size_num * .6});
+// 				}
 				
 				// Note that all rules will be prefixed with '#svg_editor' when parsed
 				var cssResizeRules = {
-					".tool_button,\
-					.push_button,\
-					.tool_button_current,\
-					.push_button_pressed,\
-					.disabled,\
-					.icon_label,\
-					.tools_flyout .tool_button": {
-						'width': {s: '16px', l: '32px', xl: '48px'},
-						'height': {s: '16px', l: '32px', xl: '48px'},
-						'padding': {s: '1px', l: '2px', xl: '3px'}
-					},
-					".tool_sep": {
-						'height': {s: '16px', l: '32px', xl: '48px'},
-						'margin': {s: '2px 2px', l: '2px 5px', xl: '2px 8px'}
-					},
-					"#main_icon": {
-						'width': {s: '31px', l: '53px', xl: '75px'},
-						'height': {s: '22px', l: '42px', xl: '64px'}
-					},
+// 					".tool_button,\
+// 					.push_button,\
+// 					.tool_button_current,\
+// 					.push_button_pressed,\
+// 					.disabled,\
+// 					.icon_label,\
+// 					.tools_flyout .tool_button": {
+// 						'width': {s: '16px', l: '32px', xl: '48px'},
+// 						'height': {s: '16px', l: '32px', xl: '48px'},
+// 						'padding': {s: '1px', l: '2px', xl: '3px'}
+// 					},
+// 					".tool_sep": {
+// 						'height': {s: '16px', l: '32px', xl: '48px'},
+// 						'margin': {s: '2px 2px', l: '2px 5px', xl: '2px 8px'}
+// 					},
+// 					"#main_icon": {
+// 						'width': {s: '31px', l: '53px', xl: '75px'},
+// 						'height': {s: '22px', l: '42px', xl: '64px'}
+// 					},
 					"#tools_top": {
-						'left': {s: '36px', l: '60px', xl: '80px'},
-						'height': {s: '50px', l: '88px', xl: '125px'}
+						'left': 50,
+						'height': 72
 					},
 					"#tools_left": {
-						'width': {s: '22px', l: '30px', xl: '38px'},
-						'top': {s: '50px', l: '87px', xl: '125px'}
+						'width': 31,
+						'top': 74
 					},
 					"div#workarea": {
-						'left': {s: '27px', l: '46px', xl: '65px'},
-						'top': {s: '50px', l: '88px', xl: '125px'},
-						'bottom': {s: '55px', l: '98px', xl: '145px'}
+						'left': 38,
+						'top': 74
 					},
-					"#tools_bottom": {
-						'left': {s: '27px', l: '46px', xl: '65px'},
-						'height': {s: '58px', l: '98px', xl: '145px'}
-					},
-					"#color_tools": {
-						'border-spacing': {s: '0 1px'},
-						'margin-top': {s: '-1px'}
-					},
-					"#color_tools .icon_label": {
-						'width': {l:'43px', xl: '60px'}
-					},
-					".color_tool": {
-						'height': {s: '20px'}
-					},
-					"#tool_opacity": {
-						'top': {s: '1px'},
-						'height': {s: 'auto', l:'auto', xl:'auto'}
-					},
-					"#tools_top input, #tools_bottom input": {
-						'margin-top': {s: '2px', l: '4px', xl: '5px'},
-						'height': {s: 'auto', l: 'auto', xl: 'auto'},
-						'border': {s: '1px solid #555', l: 'auto', xl: 'auto'},
-						'font-size': {s: '.9em', l: '1.2em', xl: '1.4em'}
-					},
-					"#zoom_panel": {
-						'margin-top': {s: '3px', l: '4px', xl: '5px'}
-					},
-					"#copyright, #tools_bottom .label": {
-						'font-size': {l: '1.5em', xl: '2em'},
-						'line-height': {s: '15px'}
-					},
-					"#tools_bottom_2": {
-						'width': {l: '295px', xl: '355px'},
-						'top': {s: '4px'}
-					},
-					"#tools_top > div, #tools_top": {
-						'line-height': {s: '17px', l: '34px', xl: '50px'}
-					}, 
-					".dropdown button": {
-						'height': {s: '18px', l: '34px', xl: '40px'},
-						'line-height': {s: '18px', l: '34px', xl: '40px'},
-						'margin-top': {s: '3px'}
-					},
-					"#tools_top label, #tools_bottom label": {
-						'font-size': {s: '1em', l: '1.5em', xl: '2em'},
-						'height': {s: '25px', l: '42px', xl: '64px'}
-					}, 
-					"div.toolset": {
-						'height': {s: '25px', l: '42px', xl: '64px'}
-					},
-					"#tool_bold, #tool_italic": {
-						'font-size': {s: '1.5em', l: '3em', xl: '4.5em'}
-					},
-					"#sidepanels": {
-						'top': {s: '50px', l: '88px', xl: '125px'},
-						'bottom': {s: '51px', l: '68px', xl: '65px'}
-					},
-					'#layerbuttons': {
-						'width': {l: '130px', xl: '175px'},
-						'height': {l: '24px', xl: '30px'}
-					},
-					'#layerlist': {
-						'width': {l: '128px', xl: '150px'}
-					},			
-					'.layer_button': {
-						'width': {l: '19px', xl: '28px'},
-						'height': {l: '19px', xl: '28px'}
-					},
-					"input.spin-button": {
-						'background-image': {l: "url('images/spinbtn_updn_big.png')", xl: "url('images/spinbtn_updn_big.png')"},
-						'background-position': {l: '100% -5px', xl: '100% -2px'},
-						'padding-right': {l: '24px', xl: '24px' }
-					},
-					"input.spin-button.up": {
-						'background-position': {l: '100% -45px', xl: '100% -42px'}
-					},
-					"input.spin-button.down": {
-						'background-position': {l: '100% -85px', xl: '100% -82px'}
-					},
-					"#position_opts": {
-						'width': {all: (size_num*4) +'px'}
-					}
+// 					"#tools_bottom": {
+// 						'left': {s: '27px', l: '46px', xl: '65px'},
+// 						'height': {s: '58px', l: '98px', xl: '145px'}
+// 					},
+// 					"#color_tools": {
+// 						'border-spacing': {s: '0 1px'},
+// 						'margin-top': {s: '-1px'}
+// 					},
+// 					"#color_tools .icon_label": {
+// 						'width': {l:'43px', xl: '60px'}
+// 					},
+// 					".color_tool": {
+// 						'height': {s: '20px'}
+// 					},
+// 					"#tool_opacity": {
+// 						'top': {s: '1px'},
+// 						'height': {s: 'auto', l:'auto', xl:'auto'}
+// 					},
+// 					"#tools_top input, #tools_bottom input": {
+// 						'margin-top': {s: '2px', l: '4px', xl: '5px'},
+// 						'height': {s: 'auto', l: 'auto', xl: 'auto'},
+// 						'border': {s: '1px solid #555', l: 'auto', xl: 'auto'},
+// 						'font-size': {s: '.9em', l: '1.2em', xl: '1.4em'}
+// 					},
+// 					"#zoom_panel": {
+// 						'margin-top': {s: '3px', l: '4px', xl: '5px'}
+// 					},
+// 					"#copyright, #tools_bottom .label": {
+// 						'font-size': {l: '1.5em', xl: '2em'},
+// 						'line-height': {s: '15px'}
+// 					},
+// 					"#tools_bottom_2": {
+// 						'width': {l: '295px', xl: '355px'},
+// 						'top': {s: '4px'}
+// 					},
+// 					"#tools_top > div, #tools_top": {
+// 						'line-height': {s: '17px', l: '34px', xl: '50px'}
+// 					}, 
+// 					".dropdown button": {
+// 						'height': {s: '18px', l: '34px', xl: '40px'},
+// 						'line-height': {s: '18px', l: '34px', xl: '40px'},
+// 						'margin-top': {s: '3px'}
+// 					},
+// 					"#tools_top label, #tools_bottom label": {
+// 						'font-size': {s: '1em', l: '1.5em', xl: '2em'},
+// 						'height': {s: '25px', l: '42px', xl: '64px'}
+// 					}, 
+// 					"div.toolset": {
+// 						'height': {s: '25px', l: '42px', xl: '64px'}
+// 					},
+// 					"#tool_bold, #tool_italic": {
+// 						'font-size': {s: '1.5em', l: '3em', xl: '4.5em'}
+// 					},
+// 					"#sidepanels": {
+// 						'top': {s: '50px', l: '88px', xl: '125px'},
+// 						'bottom': {s: '51px', l: '68px', xl: '65px'}
+// 					},
+// 					'#layerbuttons': {
+// 						'width': {l: '130px', xl: '175px'},
+// 						'height': {l: '24px', xl: '30px'}
+// 					},
+// 					'#layerlist': {
+// 						'width': {l: '128px', xl: '150px'}
+// 					},			
+// 					'.layer_button': {
+// 						'width': {l: '19px', xl: '28px'},
+// 						'height': {l: '19px', xl: '28px'}
+// 					},
+// 					"input.spin-button": {
+// 						'background-image': {l: "url('images/spinbtn_updn_big.png')", xl: "url('images/spinbtn_updn_big.png')"},
+// 						'background-position': {l: '100% -5px', xl: '100% -2px'},
+// 						'padding-right': {l: '24px', xl: '24px' }
+// 					},
+// 					"input.spin-button.up": {
+// 						'background-position': {l: '100% -45px', xl: '100% -42px'}
+// 					},
+// 					"input.spin-button.down": {
+// 						'background-position': {l: '100% -85px', xl: '100% -82px'}
+// 					},
+// 					"#position_opts": {
+// 						'width': {all: (size_num*4) +'px'}
+// 					}
 				};
 				
 				var rule_elem = $('#tool_size_rules');
@@ -2507,12 +2832,21 @@
 						selector = '#svg_editor ' + selector.replace(/,/g,', #svg_editor');
 						style_str += selector + '{';
 						$.each(rules, function(prop, values) {
-							if(values[size] || values.all) {
-								style_str += (prop + ':' + (values[size] || values.all) + ';');
+							if(typeof values === 'number') {
+								var val = (values * scale) + 'px';
+							} else if(values[size] || values.all) {
+								var val = (values[size] || values.all);
 							}
+							style_str += (prop + ':' + val + ';');
 						});
 						style_str += '}';
 					});
+					//this.style[ua_prefix + 'Transform'] = 'scale(' + scale + ')';
+					var prefix = '-' + ua_prefix.toLowerCase() + '-';
+					style_str += (sel_toscale + '{' + prefix + 'transform: scale(' + scale + ');}'
+					+ ' #svg_editor div.toolset .toolset {' + prefix + 'transform: scale(1); margin: 1px !important;}' // Hack for markers
+					+ ' #svg_editor .ui-slider {' + prefix + 'transform: scale(' + (1/scale) + ');}' // Hack for sliders
+					);
 					rule_elem.text(style_str);
 				}
 				
@@ -2579,33 +2913,6 @@
 				});
 			}
 		
-			function setImageURL(url) {
-				if(!url) url = default_img_url;
-				
-				svgCanvas.setImageURL(url);
-				$('#image_url').val(url);
-				
-				if(url.indexOf('data:') === 0) {
-					// data URI found
-					$('#image_url').hide();
-					$('#change_image_url').show();
-				} else {
-					// regular URL
-					
-					svgCanvas.embedImage(url, function(datauri) {
-						if(!datauri) {
-							// Couldn't embed, so show warning
-							$('#url_notice').show();
-						} else {
-							$('#url_notice').hide();
-						}
-						default_img_url = url;
-					});
-					$('#image_url').show();
-					$('#change_image_url').hide();
-				}
-			}
-		
 			// added these event handlers for all the push buttons so they
 			// behave more like buttons being pressed-in and not images
 			(function() {
@@ -2655,12 +2962,12 @@
 				var pos = elem.position();
 				$("#color_picker")
 					.draggable({cancel:'.jPicker_table,.jGraduate_lgPick,.jGraduate_rgPick'})
-					.css({'left': pos.left, 'bottom': 50 - pos.top})
+					.css(curConfig.colorPickerCSS || {'left': pos.left, 'bottom': 50 - pos.top})
 					.jGraduate(
 					{ 
 						paint: paint,
 						window: { pickerTitle: title },
-						images: { clientPath: "jgraduate/images/" }
+						images: { clientPath: curConfig.jGraduatePath }
 					},
 					function(p) {
 						paint = new $.jGraduate.Paint(p);
@@ -2671,7 +2978,6 @@
 						if (paint.type == "linearGradient" || paint.type == "radialGradient") {
 							svgbox.removeChild(oldgrad);
 							var newgrad = svgbox.appendChild(document.importNode(paint[paint.type], true));
-							svgCanvas.fixOperaXML(newgrad, paint[paint.type])
 							newgrad.id = "gradbox_"+picker;
 							rectbox.setAttribute("fill", "url(#gradbox_" + picker + ")");
 							rectbox.setAttribute("opacity", paint.alpha/100);
@@ -2682,11 +2988,11 @@
 						}
 		
 						if (picker == 'stroke') {
-							svgCanvas.setStrokePaint(paint, true);
+							svgCanvas.setPaint('stroke', paint);
 							strokePaint = paint;
 						}
 						else {
-							svgCanvas.setFillPaint(paint, true);
+							svgCanvas.setPaint('fill', paint);
 							fillPaint = paint;
 						}
 						updateToolbar();
@@ -2698,8 +3004,8 @@
 			};
 		
 			var updateToolButtonState = function() {
-				var bNoFill = (svgCanvas.getFillColor() == 'none');
-				var bNoStroke = (svgCanvas.getStrokeColor() == 'none');
+				var bNoFill = (svgCanvas.getColor('fill') == 'none');
+				var bNoStroke = (svgCanvas.getColor('stroke') == 'none');
 				var buttonsNeedingStroke = [ '#tool_fhpath', '#tool_line' ];
 				var buttonsNeedingFillAndStroke = [ '#tools_rect .tool_button', '#tools_ellipse .tool_button', '#tool_text', '#tool_path'];
 				if (bNoStroke) {
@@ -2936,13 +3242,14 @@
 			
 			var SIDEPANEL_MAXWIDTH = 300;
 			var SIDEPANEL_OPENWIDTH = 150;
-			var sidedrag = -1, sidedragging = false;
+			var sidedrag = -1, sidedragging = false, allowmove = false;
 				
 			var resizePanel = function(evt) {
+				if (!allowmove) return;
 				if (sidedrag == -1) return;
 				sidedragging = true;
 				var deltax = sidedrag - evt.pageX;
-	
+				
 				var sidepanels = $('#sidepanels');
 				var sidewidth = parseInt(sidepanels.css('width'));
 				if (sidewidth+deltax > SIDEPANEL_MAXWIDTH) {
@@ -2967,7 +3274,11 @@
 				.mousedown(function(evt) {
 					sidedrag = evt.pageX;
 					$(window).mousemove(resizePanel);
-					
+					allowmove = false;
+					// Silly hack for Chrome, which always runs mousemove right after mousedown
+					setTimeout(function() {
+						allowmove = true;
+					}, 20);
 				})
 				.mouseup(function(evt) {
 					if (!sidedragging) toggleSidePanel();
@@ -3214,6 +3525,7 @@
 					{sel:'#tool_clone,#tool_clone_multi', fn: clickClone, evt: 'click', key: [modKey+'C', true]},
 					{sel:'#tool_group', fn: clickGroup, evt: 'click', key: [modKey+'G', true]},
 					{sel:'#tool_ungroup', fn: clickGroup, evt: 'click'},
+					{sel:'#tool_unlink_use', fn: clickGroup, evt: 'click'},
 					{sel:'[id^=tool_align]', fn: clickAlign, evt: 'click'},
 					// these two lines are required to make Opera work properly with the flyout mechanism
 		// 			{sel:'#tools_rect_show', fn: clickRect, evt: 'click'},
@@ -3246,16 +3558,17 @@
 					setAll: function() {
 						var flyouts = {};
 						
-						$.each(tool_buttons, function(i, opts)  {
+						$.each(tool_buttons, function(i, opts)  {				
 							// Bind function to button
 							if(opts.sel) {
 								var btn = $(opts.sel);
+								if (btn.length == 0) return true; // Skip if markup does not exist
 								if(opts.evt) {
 									btn[opts.evt](opts.fn);
 								}
 		
-								// Add to parent flyout menu
-								if(opts.parent) {
+								// Add to parent flyout menu, if able to be displayed
+								if(opts.parent && $(opts.parent + '_show').length != 0) {
 									var f_h = $(opts.parent);
 									if(!f_h.length) {
 										f_h = makeFlyoutHolder(opts.parent.substr(1));
@@ -3394,7 +3707,7 @@
 			
 			window.onbeforeunload = function() { 
 				// Suppress warning if page is empty 
-				if(svgCanvas.getHistoryPosition() === 0) {
+				if(undoMgr.getUndoStackSize() === 0) {
 					show_save_warning = false;
 				}
 
@@ -3405,6 +3718,15 @@
 				}
 			};
 			
+			Editor.openPrep = function(func) {
+				$('#main_menu').hide();
+				if(undoMgr.getUndoStackSize() === 0) {
+					func(true);
+				} else {
+					$.confirm(uiStrings.QwantToOpen, func);
+				}
+			}
+			
 			// use HTML5 File API: http://www.w3.org/TR/FileAPI/
 			// if browser has HTML5 File API support, then we will show the open menu item
 			// and provide a file input to click.  When that change event fires, it will
@@ -3412,7 +3734,7 @@
 			if (window.FileReader) {
 				var inp = $('<input type="file">').change(function() {
 					var f = this;
-					var openFile = function(ok) {
+					Editor.openPrep(function(ok) {
 						if(!ok) return;
 						svgCanvas.clear();
 						if(f.files.length==1) {
@@ -3423,14 +3745,7 @@
 							};
 							reader.readAsText(f.files[0]);
 						}
-					}
-				
-					$('#main_menu').hide();
-					if(svgCanvas.getHistoryPosition() === 0) {
-						openFile(true);
-					} else {
-						$.confirm(uiStrings.QwantToOpen, openFile);
-					}
+					});
 				});
 				$("#tool_open").show().prepend(inp);
 				var inp2 = $('<input type="file">').change(function() {
@@ -3438,7 +3753,7 @@
 					if(this.files.length==1) {
 						var reader = new FileReader();
 						reader.onloadend = function(e) {
-							svgCanvas.importSvgString(e.target.result);
+							svgCanvas.importSvgString(e.target.result, true);
 							updateCanvas();
 						};
 						reader.readAsText(this.files[0]);
@@ -3447,8 +3762,7 @@
 				$("#tool_import").show().prepend(inp2);
 			}
 			
-			
-			var updateCanvas = function(center, new_ctr) {
+			var updateCanvas = Editor.updateCanvas = function(center, new_ctr) {
 				var w = workarea.width(), h = workarea.height();
 				var w_orig = w, h_orig = h;
 				var zoom = svgCanvas.getZoom();
@@ -3501,8 +3815,16 @@
 				}
 				
 				if(center) {
-					w_area[0].scrollLeft = scroll_x;
-					w_area[0].scrollTop = scroll_y;
+					// Go to top-left for larger documents
+					if(svgCanvas.contentW > w_area.width()) {
+						// Top-left
+						workarea[0].scrollLeft = offset.x - 10;
+						workarea[0].scrollTop = offset.y - 10;
+					} else {
+						// Center
+						w_area[0].scrollLeft = scroll_x;
+						w_area[0].scrollTop = scroll_y;
+					}
 				} else {
 					w_area[0].scrollLeft = new_ctr.x - w_orig/2;
 					w_area[0].scrollTop = new_ctr.y - h_orig/2;
@@ -3513,7 +3835,7 @@
 				updateCanvas(true);
 // 			});
 			
-		//	var revnums = "svg-editor.js ($Rev: 1586 $) ";
+		//	var revnums = "svg-editor.js ($Rev: 1659 $) ";
 		//	revnums += svgCanvas.getVersion();
 		//	$('#copyright')[0].setAttribute("title", revnums);
 		
@@ -3526,46 +3848,48 @@
 // 			var lang = ('lang' in curPrefs) ? curPrefs.lang : null;
 			Editor.putLocale(null, good_langs);
 			
-			try{
-				json_encode = function(obj){
-			  //simple partial JSON encoder implementation
-			  if(window.JSON && JSON.stringify) return JSON.stringify(obj);
-			  var enc = arguments.callee; //for purposes of recursion
-			  if(typeof obj == "boolean" || typeof obj == "number"){
-				  return obj+'' //should work...
-			  }else if(typeof obj == "string"){
-				//a large portion of this is stolen from Douglas Crockford's json2.js
-				return '"'+
-					  obj.replace(
-						/[\\\"\x00-\x1f\x7f-\x9f\u00ad\u0600-\u0604\u070f\u17b4\u17b5\u200c-\u200f\u2028-\u202f\u2060-\u206f\ufeff\ufff0-\uffff]/g
-					  , function (a) {
-						return '\\u' + ('0000' + a.charCodeAt(0).toString(16)).slice(-4);
-					  })
-					  +'"'; //note that this isn't quite as purtyful as the usualness
-			  }else if(obj.length){ //simple hackish test for arrayish-ness
-				for(var i = 0; i < obj.length; i++){
-				  obj[i] = enc(obj[i]); //encode every sub-thingy on top
-				}
-				return "["+obj.join(",")+"]";
-			  }else{
-				var pairs = []; //pairs will be stored here
-				for(var k in obj){ //loop through thingys
-				  pairs.push(enc(k)+":"+enc(obj[k])); //key: value
-				}
-				return "{"+pairs.join(",")+"}" //wrap in the braces
-			  }
-			}
-			  window.addEventListener("message", function(e){
-				var cbid = parseInt(e.data.substr(0, e.data.indexOf(";")));
-				try{
-				e.source.postMessage("SVGe"+cbid+";"+json_encode(eval(e.data)), e.origin);
-			  }catch(err){
-				e.source.postMessage("SVGe"+cbid+";error:"+err.message, e.origin);
-			  }
-			}, false)
-			}catch(err){
-			  window.embed_error = err;
-			}
+			// Not sure what this was being used for...commented out until known.
+			// The "message" event listener was interfering with image lib responder
+// 			try{
+// 				json_encode = function(obj){
+// 			  //simple partial JSON encoder implementation
+// 			  if(window.JSON && JSON.stringify) return JSON.stringify(obj);
+// 			  var enc = arguments.callee; //for purposes of recursion
+// 			  if(typeof obj == "boolean" || typeof obj == "number"){
+// 				  return obj+'' //should work...
+// 			  }else if(typeof obj == "string"){
+// 				//a large portion of this is stolen from Douglas Crockford's json2.js
+// 				return '"'+
+// 					  obj.replace(
+// 						/[\\\"\x00-\x1f\x7f-\x9f\u00ad\u0600-\u0604\u070f\u17b4\u17b5\u200c-\u200f\u2028-\u202f\u2060-\u206f\ufeff\ufff0-\uffff]/g
+// 					  , function (a) {
+// 						return '\\u' + ('0000' + a.charCodeAt(0).toString(16)).slice(-4);
+// 					  })
+// 					  +'"'; //note that this isn't quite as purtyful as the usualness
+// 			  }else if(obj.length){ //simple hackish test for arrayish-ness
+// 				for(var i = 0; i < obj.length; i++){
+// 				  obj[i] = enc(obj[i]); //encode every sub-thingy on top
+// 				}
+// 				return "["+obj.join(",")+"]";
+// 			  }else{
+// 				var pairs = []; //pairs will be stored here
+// 				for(var k in obj){ //loop through thingys
+// 				  pairs.push(enc(k)+":"+enc(obj[k])); //key: value
+// 				}
+// 				return "{"+pairs.join(",")+"}" //wrap in the braces
+// 			  }
+// 			}
+// 			  window.addEventListener("message", function(e){
+// 				var cbid = parseInt(e.data.substr(0, e.data.indexOf(";")));
+// 				try{
+// 				e.source.postMessage("SVGe"+cbid+";"+json_encode(eval(e.data)), e.origin);
+// 			  }catch(err){
+// 				e.source.postMessage("SVGe"+cbid+";error:"+err.message, e.origin);
+// 			  }
+// 			}, false)
+// 			}catch(err){
+// 			  window.embed_error = err;
+// 			}
 			
 		
 		
@@ -3642,11 +3966,12 @@
 			});
 		};
 		
-		Editor.loadFromURL = function(url) {
+		Editor.loadFromURL = function(url, cache) {
 			Editor.ready(function() {
 				$.ajax({
 					'url': url,
 					'dataType': 'text',
+					cache: !!cache,
 					success: svgCanvas.setSvgString,
 					error: function(xhr, stat, err) {
 						if(xhr.responseText) {

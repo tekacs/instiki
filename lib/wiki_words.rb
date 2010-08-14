@@ -1,23 +1,24 @@
 #coding: utf-8
 # Contains all the methods for finding and replacing wiki words
 
-require 'stringsupport'
+require 'instiki_stringsupport'
 
 module WikiWords
   # In order of appearance: Latin, greek, cyrillic, armenian
   I18N_HIGHER_CASE_LETTERS =
     "ÀÁÂÃÄÅĀĄĂÆÇĆČĈĊĎĐÈÉÊËĒĘĚĔĖĜĞĠĢĤĦÌÍÎÏĪĨĬĮİĲĴĶŁĽĹĻĿÑŃŇŅŊÒÓÔÕÖØŌŐŎŒŔŘŖŚŠŞŜȘŤŢŦȚÙÚÛÜŪŮŰŬŨŲŴŶŸȲÝŹŽŻ" + 
     "ΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡΣΤΥΦΧΨΩ" + 
-    "ΆΈΉΊΌΎΏѠѢѤѦѨѪѬѮѰѲѴѶѸѺѼѾҀҊҌҎҐҒҔҖҘҚҜҞҠҢҤҦҨҪҬҮҰҲҴҶҸҺҼҾӁӃӅӇӉӋӍӏӐӒӔӖӘӚӜӞӠӢӤӦӨӪӬӮӰӲӴӸЖ" +
+    "ЀЁЂЃЄЅІЇЈЉЊЋЌЍЎЏАБВГДЕЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯѠѢѤѦѨѪѬѮѰѲѴѶѸѺѼѾҀҊҌҎҐҒҔҖҘҚҜҞҠҢҤҦҨҪҬҮҰҲҴҶҸҺҼҾӀӁӃӅӇӉӋӍӐӒӔӖӘӚӜӞӠӢӤӦӨӪӬӮӰӲӴӶӸӺӼӾԀԂԄԆԈԊԌԎԐԒԔԖԘԚԜԞԠԢ" +
     "ԱԲԳԴԵԶԷԸԹԺԻԼԽԾԿՀՁՂՃՄՅՆՇՈՉՊՋՌՍՎՏՐՑՒՓՔՕՖ"
 
   I18N_LOWER_CASE_LETTERS =
     "àáâãäåāąăæçćĉċčďđèéêëēęěĕėƒĝğġģĥħìíîïīĩĭįıĳĵķĸłľĺļŀñńňņŉŋòóôõöøōŏőœŕřŗśŝšşșťţŧțùúûüūůűŭũųŵýÿŷžżźÞþßſð" +
     "άέήίΰαβγδεζηθικλμνξοπρςστυφχψωϊϋόύώΐ" +
-    "абвгдежзийклмнопрстуфхцчшщъыьэюяѐёђѓєѕіїјљћќѝўџѡѣѥѧѩѫѭѯѱѳѵѷѹѻѽѿҁҋҌҍҏґғҕҗҙқҝҟҡңҥҧҩҫҭүұҳҵҷҹһҽҿӀӂӄӆӈӊӌӎӑӓӕӗәӛӝӟӡӣӥӧөӫӭӯӱӳӵӹ" +
-    "աբգդեզէըթժիլխծկհձղճմյնշոչպջռսվտրցւփքօֆև"
+    "абвгдежзийклмнопрстуфхцчшщъыьэюяѐёђѓєѕіїјљњћќѝўџѡѣѥѧѩѫѭѯѱѳѵѷѹѻѽѿҁҋҍҏґғҕҗҙқҝҟҡңҥҧҩҫҭүұҳҵҷҹһҽҿӂӄӆӈӊӌӎӏӑӓӕӗәӛӝӟӡӣӥӧөӫӭӯӱӳӵӷӹӻӽӿԁԃԅԇԉԋԍԏԑԓԕԗԙԛԝԟԡԣ" +
+     "աբգդեզէըթժիլխծկհձղճմյնշոչպջռսվտրցւփքօֆև"
 
-  WIKI_WORD_PATTERN = '[A-Z' + I18N_HIGHER_CASE_LETTERS + ']+[a-z' + I18N_LOWER_CASE_LETTERS + ']+[A-Z' + I18N_HIGHER_CASE_LETTERS + ']\w+'
+  WIKI_WORD_PATTERN = '[A-Z' + I18N_HIGHER_CASE_LETTERS + ']+[a-z' + I18N_LOWER_CASE_LETTERS + ']+[A-Z' + I18N_HIGHER_CASE_LETTERS + 
+    '][A-Za-z0-9_' + I18N_HIGHER_CASE_LETTERS +  I18N_LOWER_CASE_LETTERS + ']+'
   CAMEL_CASED_WORD_BORDER = /([a-z#{I18N_LOWER_CASE_LETTERS}])([A-Z#{I18N_HIGHER_CASE_LETTERS}])/u
 
   def self.separate(wiki_word)

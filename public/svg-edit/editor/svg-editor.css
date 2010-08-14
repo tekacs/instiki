@@ -2,6 +2,13 @@
 	background: #D8D8D8;
 }
 
+#svg_editor * {
+	transform-origin: 0 0;
+	-moz-transform-origin: 0 0;
+	-o-transform-origin: 0 0;
+	-webkit-transform-origin: 0 0;
+}
+
 #svg_editor {
 	font-size: 8pt;
 	font-family: Verdana, Helvetica, Arial;
@@ -23,6 +30,7 @@
 
 #svg_editor #svgroot {
 	-moz-user-select: none;
+	-webkit-user-select: none;
 	position: absolute;
 	top: 0;
 	left: 0;
@@ -140,6 +148,9 @@
 	width: 0px;
 	overflow: auto;
 	margin: 0px;
+	-moz-user-select: none;
+	-webkit-user-select: none;
+
 }
 
 /*
@@ -162,6 +173,7 @@
 	-moz-border-radius: 5px;
 	-webkit-border-radius: 5px;
 	-moz-user-select: none;
+	-webkit-user-select: none;
 }
 
 #svg_editor #sidepanel_handle:hover {
@@ -171,6 +183,7 @@
 #svg_editor #sidepanel_handle * {
 	cursor: pointer;
 	-moz-user-select: none;
+	-webkit-user-select: none;
 }
 #svg_editor #layerbuttons {
 	margin: 0px;
@@ -272,6 +285,7 @@
 	position: absolute;
 	top: 4px;
 	left: 4px;
+	z-index: 5;
 }
 
 
@@ -460,6 +474,11 @@
 	height: 34px;
 }
 
+#svg_editor div.toolset label span {
+/*	outline: 1px solid red;*/
+	padding-top: 3px;
+	display: inline-block;
+}
 
 #tools_top > div > * {
 	float: left;
@@ -596,13 +615,18 @@ span.zoom_tool {
 	overflow: hidden;
 }
 
-#tool_open input, #tool_import input {
-	-moz-transform: scale(4,2); /* Not entirely necessary, but keeps it nice and big for OS X*/
-	height: 100%;
+#tool_image {
+	overflow: hidden;
+}
+
+#tool_open input, 
+#tool_import input,
+#tool_image input {
 	position: absolute;
 	opacity: 0;
-	top: -3px;
-	right: 270px;
+	font-size: 10em;
+	top: -5px;
+	right: -5px;
 	margin: 0;
 	cursor: pointer; /* Sadly doesn't appear to have an effect */
 }
@@ -768,6 +792,7 @@ span.zoom_tool {
 
 #svg_editor .stroke_tool div div {
 	-moz-user-select: none;
+	-webkit-user-select: none;
 	width: 20px;
 	height: 20px;
 	margin: 1px 0;
@@ -811,12 +836,22 @@ span.zoom_tool {
 	padding-left: 0;
 }
 
-#option_lists #position_opts {
-	width: 90px;
-	margin-left: -32px;
+#option_lists .optcols2 {
+	width: 70px;
+	margin-left: -15px;
 }
 
-#option_lists #position_opts li {
+#option_lists .optcols3 {
+	width: 90px;
+	margin-left: -31px;
+}
+
+#option_lists .optcols4 {
+	width: 130px;
+	margin-left: -44px;
+}
+
+#option_lists ul[class^=optcols] li {
 	float: left;
 }
 

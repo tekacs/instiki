@@ -8,16 +8,18 @@ module Rack
     class WEBrick < ::WEBrick::HTTPServlet::AbstractServlet
       def self.run(app, options={})
         options[:BindAddress] = options.delete(:Host) if options[:Host]
-        server = ::WEBrick::HTTPServer.new(options)
-        server.mount "/", Rack::Handler::WEBrick, app
-        trap(:INT) { server.shutdown }
-        trap(:TERM) { server.shutdown }
-        yield server  if block_given?
-        server.start
+        @server = ::WEBrick::HTTPServer.new(options)
+        @server.mount "/", Rack::Handler::WEBrick, app
+        trap(:INT) { @server.shutdown }
+        trap(:TERM) { @server.shutdown }
+        yield @server  if block_given?
+        @server.start
       end
     end
   end
 
+ if Rack.release  <= "1.2"
+  # The Tempfile bug is fixed in the bundled version of Rack
   class RewindableInput
     def make_rewindable
       # Buffer all data into a tempfile. Since this tempfile is private to this
@@ -39,7 +41,7 @@ module Rack
         entire_buffer_written_out = false
         while !entire_buffer_written_out
           written = @rewindable_io.write(buffer)
-          entire_buffer_written_out = written == buffer.size
+          entire_buffer_written_out = written == Rack::Utils.bytesize(buffer)
           if !entire_buffer_written_out
             buffer.slice!(0 .. written - 1)
           end
@@ -58,4 +60,6 @@ module Rack
       ruby_engine == "ruby" && RUBY_VERSION == "1.9.1" && RUBY_PATCHLEVEL >= 152
     end
   end
+ end
+ 
 end
