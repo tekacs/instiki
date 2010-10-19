@@ -142,6 +142,8 @@ class WikiControllerTest < ActionController::TestCase
     
     # Tempfile doesn't know how to open files with binary flag, hence the two-step process
     Tempfile.open('instiki_export_file') { |f| @tempfile_path = f.path }
+    # some wacky bug in Ruby 1.9.2p0's Tempfile is fixed by
+    @tempfile_path.to_s
     begin 
       File.open(@tempfile_path, 'wb') { |f| f.write(r.body); @exported_file = f.path }
       Zip::ZipFile.open(@exported_file) do |zip| 
@@ -1067,7 +1069,7 @@ class WikiControllerTest < ActionController::TestCase
 %
 %  \color{} with HTML colorspec
 %  \bgcolor
-%  \array
+%  \array with options (without options, it's equivalent to the matrix environment)
 
 % Of the standard HTML named colors, white, black, red, green, blue and yellow
 % are predefined in the color package. Here are the rest.
@@ -1141,6 +1143,7 @@ class WikiControllerTest < ActionController::TestCase
 % Renames \sqrt as \oldsqrt and redefine root to result in \sqrt[#1]{#2}
 \let\oldroot\root
 \def\root#1#2{\oldroot #1 \of{#2}}
+\renewcommand{\sqrt}[2][]{\oldroot #1 \of{#2}}
 
 % Manually declare the txfonts symbolsC font
 \DeclareSymbolFont{symbolsC}{U}{txsyc}{m}{n}
@@ -1195,6 +1198,9 @@ class WikiControllerTest < ActionController::TestCase
 \mkern2mu\raise4\p@\hbox{.}\mkern1mu
 \raise7\p@\vbox{\kern7\p@\hbox{.}}\mkern1mu}}
 \makeatother
+
+%% Fix array
+\newcommand{\itexarray}[1]{\begin{matrix}#1\end{matrix}}
 
 %% Renaming existing commands
 \newcommand{\underoverset}[3]{\underset{#1}{\overset{#2}{#3}}}
@@ -1337,6 +1343,28 @@ Page2 contents $\mathbb{01234}$.
 
 \end{document}
 !, r.body
+  end
+
+  def test_tex_list
+    @wiki.write_page('wiki1', "Ch\303\242timent & Page",
+        "Page2 contents $\\mathbb{01234}$.\n",
+        Time.now, Author.new('AnotherAuthor', '127.0.0.2'), x_test_renderer)
+    @request.env['RAW_POST_DATA'] = "_form_key=353106ff8c8466727ee5338baaa0640c87c9b0d6&Ch%C3%A2timent+%26+Page=tex&BogusPage=tex&HomePage=tex&commit=Export"
+    r = process('tex_list', 'web' => 'wiki1', 'Page2' => 'tex', 'BogusPage'=> 'tex', 'HomePage' => 'tex')
+    assert_response(:success)
+    assert_equal @tex_header1 + "\\usepackage{mathbbol}\n" + @tex_header2 + %q!\section*{Châtiment \\& Page}
+
+Page2 contents $\mathbb{01234}$.
+
+\section*{HomePage}
+
+HisWay would be MyWay $\sin(x) \includegraphics[width=3em]{foo}$ in kinda ThatWay in HisWay though MyWay $\backslash$OverThere --{} see SmartEngine in that SmartEngineGUI
+
+
+
+
+\end{document}
+!, r.body  
   end
 
   def test_web_list

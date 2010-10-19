@@ -5,17 +5,19 @@
 <meta http-equiv="Content-type" content="text/html;charset=UTF-8" />
 <meta http-equiv="X-UA-Compatible" content="chrome=1"/>
 <link rel="icon" type="image/png" href="images/logo.png"/>
-<link rel="stylesheet" href="jgraduate/css/jPicker-1.0.12.css" type="text/css"/>
+<link rel="stylesheet" href="jgraduate/css/jPicker.css" type="text/css"/>
 <link rel="stylesheet" href="jgraduate/css/jgraduate.css" type="text/css"/>
 <link rel="stylesheet" href="svg-editor.css" type="text/css"/>
 <link rel="stylesheet" href="spinbtn/JQuerySpinBtn.css" type="text/css"/>
 <!-- Development version of script tags: -->
-<script type="text/javascript" src="jquery.js"></script>
+<!-- <script type="text/javascript" src="jquery.js"></script> -->
+<script type="text/javascript" src="http://ajax.googleapis.com/ajax/libs/jquery/1.4/jquery.js"></script>
 <script type="text/javascript" src="js-hotkeys/jquery.hotkeys.min.js"></script>
 <script type="text/javascript" src="jgraduate/jquery.jgraduate.js"></script>
 <script type="text/javascript" src="svgicons/jquery.svgicons.js"></script>
 <script type="text/javascript" src="jquerybbq/jquery.bbq.min.js"></script>
 <script type="text/javascript" src="spinbtn/JQuerySpinBtn.js"></script>
+<script type="text/javascript" src="contextmenu/jquery.contextMenu.js"></script>
 <script type="text/javascript" src="svgcanvas.js"></script>
 <script type="text/javascript" src="svg-editor.js"></script>
 <script type="text/javascript" src="locale/locale.js"></script>
@@ -23,7 +25,7 @@
 <!-- <script type="text/javascript" src="extensions/ext-helloworld.js"></script> -->
 
 <!-- Release version of script tags: >
-<script type="text/javascript" src="http://ajax.googleapis.com/ajax/libs/jquery/1.3/jquery.min.js"></script>
+<script type="text/javascript" src="jquery.js"></script>
 <script type="text/javascript" src="js-hotkeys/jquery.hotkeys-0.7.9.js"></script>
 <script type="text/javascript" src="jquerybbq/jquery.bbq.min.js"></script>
 <script type="text/javascript" src="jgraduate/jquery.jgraduate.min.js"></script>
@@ -35,7 +37,7 @@ script type="text/javascript" src="locale/locale.min.js"></script-->
 
 <!-- always minified scripts -->
 <script type="text/javascript" src="jquery-ui/jquery-ui-1.8.custom.min.js"></script>
-<script type="text/javascript" src="jgraduate/jpicker-1.0.12.min.js"></script>
+<script type="text/javascript" src="jgraduate/jpicker.min.js"></script>
 
 <!-- feeds -->
 <link rel="alternate" type="application/atom+xml" title="SVG-edit General Discussion" href="http://groups.google.com/group/svg-edit/feed/atom_v1_0_msgs.xml" />
@@ -47,9 +49,21 @@ script type="text/javascript" src="locale/locale.min.js"></script-->
 <body>
 <div id="svg_editor">
 
+<div id="rulers">
+	<div id="ruler_corner"></div>
+	<div id="ruler_x">
+		<canvas height="15"></canvas>
+	</div>
+	<div id="ruler_y">
+		<canvas width="15"></canvas>
+	</div>
+</div>
+
 <div id="workarea">
 <style id="styleoverrides" type="text/css" media="screen" scoped="scoped"></style>
-<div id="svgcanvas"></div>
+<div id="svgcanvas" style="position:relative">
+
+</div>
 </div>
 
 <div id="sidepanels">
@@ -61,6 +75,7 @@ script type="text/javascript" src="locale/locale.min.js"></script-->
 			<div id="layer_rename" class="layer_button"  title="Rename Layer"></div>
 			<div id="layer_up" class="layer_button"  title="Move Layer Up"></div>
 			<div id="layer_down" class="layer_button"  title="Move Layer Down"></div>
+			<div id="layer_moreopts" class="layer_button"  title="More Options"></div>
 		</fieldset>
 		
 		<table id="layerlist">
@@ -119,15 +134,20 @@ script type="text/javascript" src="locale/locale.min.js"></script-->
 			
 			<li id="tool_docprops">
 				<div></div>
-				Document Properties [I]
+				Document Properties [P]
 			</li>
 		</ul>
-		
+
 		<p>
 			<a href="http://svg-edit.googlecode.com/" target="_blank">
 				SVG-edit Home Page
 			</a>
 		</p>
+
+		<button id="tool_prefs_option">
+			Editor Options
+		</button>
+
 
 	</div>
 </div>
@@ -155,8 +175,8 @@ script type="text/javascript" src="locale/locale.min.js"></script-->
 			<div class="push_button" id="tool_clone" title="Clone Element [C]"></div>
 			<div class="push_button" id="tool_delete" title="Delete Element [Delete/Backspace]"></div>
 			<div class="tool_sep"></div>
-			<div class="push_button" id="tool_move_top" title="Move to Top [Shift+Up]"></div>
-			<div class="push_button" id="tool_move_bottom" title="Move to Bottom [Shift+Down]"></div>
+			<div class="push_button" id="tool_move_top" title="Bring to Front [ Ctrl+Shift+] ]"></div>
+			<div class="push_button" id="tool_move_bottom" title="Send to Back [ Ctrl+Shift+[ ]"></div>
 			<div class="push_button" id="tool_topath" title="Convert to Path"></div>
 			<div class="push_button" id="tool_reorient" title="Reorient path"></div>
 			<div class="tool_sep"></div>
@@ -391,7 +411,9 @@ script type="text/javascript" src="locale/locale.min.js"></script-->
 		<div class="tool_button" id="tool_openclose_path" title="Open/close sub-path"></div>
 		<div class="tool_button" id="tool_add_subpath" title="Add sub-path"></div>
 	</div>
-	
+	<div id="cur_context_panel">
+		
+	</div>
 </div> <!-- tools_top -->
 
 <div id="tools_left" class="tools_panel">
@@ -523,7 +545,7 @@ script type="text/javascript" src="locale/locale.min.js"></script-->
 	<div id="tools_bottom_3">
 		<div id="palette_holder"><div id="palette" title="Click to change fill color, shift-click to change stroke color"></div></div>
 	</div>
-	<div id="copyright"><span id="copyrightLabel">Powered by</span> <a href="http://svg-edit.googlecode.com/" target="_blank">SVG-edit v2.5.1</a></div>
+	<div id="copyright"><span id="copyrightLabel">Powered by</span> <a href="http://svg-edit.googlecode.com/" target="_blank">SVG-edit v2.6-alpha</a></div>
 </div>
 
 <div id="option_lists">
@@ -562,11 +584,16 @@ script type="text/javascript" src="locale/locale.min.js"></script-->
 			<button id="tool_source_save">Apply Changes</button>
 			<button id="tool_source_cancel">Cancel</button>
 		</div>
+		<div id="save_output_btns">
+			<p id="copy_save_note">Copy the contents of this box into a text editor, then save the file with a .svg extension.</p>
+			<button id="copy_save_done">Done</button>
+		</div>
 		<form>
 			<textarea id="svg_source_textarea" spellcheck="false"></textarea>
 		</form>
 	</div>
 </div>
+
 
 <div id="svg_docprops">
 	<div id="svg_docprops_overlay"></div>
@@ -581,7 +608,7 @@ script type="text/javascript" src="locale/locale.min.js"></script-->
 			<legend id="svginfo_image_props">Image Properties</legend>
 			<label>
 				<span id="svginfo_title">Title:</span>
-				<input type="text" id="canvas_title" size="24"/>
+				<input type="text" id="canvas_title"/>
 			</label>			
 	
 			<fieldset id="change_resolution">
@@ -609,11 +636,20 @@ script type="text/javascript" src="locale/locale.min.js"></script-->
 				<label><input type="radio" name="image_opt" value="embed" checked="checked"/> <span id="image_opt_embed">Embed data (local files)</span> </label>
 				<label><input type="radio" name="image_opt" value="ref"/> <span id="image_opt_ref">Use file reference</span> </label>
 			</fieldset>			
-
-
 		</fieldset>
 
-		<fieldset id="svg_docprops_prefs">
+	</div>
+</div>
+
+<div id="svg_prefs">
+	<div id="svg_prefs_overlay"></div>
+	<div id="svg_prefs_container">
+		<div id="tool_prefs_back" class="toolbar_button">
+			<button id="tool_prefs_save">OK</button>
+			<button id="tool_prefs_cancel">Cancel</button>
+		</div>
+
+		<fieldset>
 			<legend id="svginfo_editor_prefs">Editor Preferences</legend>
 
 			<label><span id="svginfo_lang">Language:</span>
@@ -628,6 +664,7 @@ script type="text/javascript" src="locale/locale.min.js"></script-->
 					<option id="lang_fr" value="fr">Français</option>
 					<option id="lang_fy" value="fy">Frysk</option>
 					<option id="lang_hi" value="hi">&#2361;&#2367;&#2344;&#2381;&#2342;&#2368;, &#2361;&#2367;&#2306;&#2342;&#2368;</option>
+					<option id="lang_it" value="it">Italiano</option>
 					<option id="lang_ja" value="ja">日本語</option>
 					<option id="lang_nl" value="nl">Nederlands</option>
 					<option id="lang_pt-BR" value="pt-BR">Português (BR)</option>
@@ -650,10 +687,34 @@ script type="text/javascript" src="locale/locale.min.js"></script-->
 			<fieldset id="change_background">
 				<legend id="svginfo_change_background">Editor Background</legend>
 				<div id="bg_blocks"></div>
-				<label><span id="svginfo_bg_url">URL:</span> <input type="text" id="canvas_bg_url" size="21"/></label>
+				<label><span id="svginfo_bg_url">URL:</span> <input type="text" id="canvas_bg_url"/></label>
 				<p id="svginfo_bg_note">Note: Background will not be saved with image.</p>
 			</fieldset>
 			
+			<fieldset id="change_grid">
+				<legend id="svginfo_grid_settings">Grid</legend>
+				<label><span id="svginfo_snap_onoff">Snapping on/off</span><input type="checkbox" value="snapping_on" id="grid_snapping_on"></label>
+				<label><span id="svginfo_snap_step">Snapping Step-Size:</span> <input type="text" id="grid_snapping_step" size="3" value="10"/></label>
+			</fieldset>
+
+			<fieldset id="units_rulers">
+				<legend id="svginfo_units_rulers">Units & Rulers</legend>
+				<label><span id="svginfo_rulers_onoff">Show rulers</span><input type="checkbox" value="show_rulers" id="show_rulers" checked></label>
+				<label>
+					<span id="svginfo_unit">Base Unit:</span>
+					<select id="base_unit">
+						<option value="px" selected>Pixels</option>
+						<option value="cm">Centimeters</option>
+						<option value="mm">Millimeters</option>
+						<option value="pt">Points</option>
+						<option value="pc">Picas</option>
+						<option value="em">Ems</option>
+						<option value="ex">Exs</option>
+					</select>
+				</label>
+				</label>
+			</fieldset>
+	
 		</fieldset>
 
 	</div>
@@ -666,6 +727,28 @@ script type="text/javascript" src="locale/locale.min.js"></script-->
 		<div id="dialog_buttons"></div>
 	</div>
 </div>
+
+<ul id="cmenu_canvas" class="contextMenu">
+	<li><a href="#cut">Cut</a></li>
+	<li><a href="#copy">Copy</a></li>
+	<li><a href="#paste">Paste</a></li>
+	<li><a href="#paste_in_place">Paste in Place</a></li>
+	<li class="separator"><a href="#delete">Delete</a></li>
+	<li class="separator"><a href="#group">Group<span class="shortcut">G</span></a></li>
+	<li><a href="#ungroup">Ungroup<span class="shortcut">G</span></a></li>
+        <li class="separator"><a href="#move_front">Bring to Front<span class="shortcut">SHFT+CTRL+]</span></a></li>
+	<li><a href="#move_up">Bring Forward<span class="shortcut">CTRL+]</span></a></li>
+	<li><a href="#move_down">Send Backward<span class="shortcut">CTRL+[</span></a></li>
+        <li><a href="#move_back">Send to Back<span class="shortcut">SHFT+CTRL+[</span></a></li>
+</ul>
+
+
+<ul id="cmenu_layers" class="contextMenu">
+	<li><a href="#dupe">Duplicate Layer...</a></li>
+	<li><a href="#delete">Delete Layer</a></li>
+	<li><a href="#merge_down">Merge Down</a></li>
+	<li><a href="#merge_all">Merge All</a></li>
+</ul>
 
 </body>
 </html>

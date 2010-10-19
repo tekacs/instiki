@@ -184,6 +184,31 @@ EOL
   def atom_with_headlines
     render_atom(hide_description = true)
   end
+  
+  def tex_list
+    return unless is_post
+    if [:markdownMML, :markdownPNG, :markdown].include?(@web.markup)
+      @tex_content = ''
+      # Ruby 1.9.x has ordered hashes; 1.8.x doesn't. So let's just parse the query ourselves.
+      ordered_params = ActiveSupport::OrderedHash[*request.raw_post.split('&').collect {|k_v| k_v.split('=').collect {|x| CGI::unescape(x)}}.flatten]
+      ordered_params.each do |name, p|
+        if p == 'tex' && @web.has_page?(name)
+          @tex_content << "\\section*\{#{Maruku.new(name).to_latex.strip}\}\n\n"
+          @tex_content << Maruku.new(@web.page(name).content).to_latex
+        end
+      end
+    else
+      @tex_content = 'TeX export only supported with the Markdown text filters.'
+    end
+    if @tex_content == ''
+      flash[:error] = "You didn't select any pages to export."
+      redirect_to :back
+      return
+    end
+    expire_action :controller => 'wiki', :web => @web.address, :action => 'list', :category => params['category']
+    render(:layout => 'tex')
+  end
+
 
   def search
     @query = params['query'].purify
@@ -280,11 +305,7 @@ EOL
 
   def save
     render(:status => 404, :text => 'Undefined page name', :layout => 'error') and return if @page_name.nil?
-    unless (request.post? || Rails.env.test?)
-      headers['Allow'] = 'POST'
-      render(:status => 405, :text => 'You must use an HTTP POST', :layout => 'error')
-      return
-    end
+    return unless is_post
     author_name = params['author'].purify
     author_name = 'AnonymousCoward' if author_name =~ /^\s*$/
     
@@ -389,6 +410,7 @@ EOL
     else
       @tex_content = 'TeX export only supported with the Markdown text filters.'
     end
+    render(:layout => 'tex')
   end
 
   def s5

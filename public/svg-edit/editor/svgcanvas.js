@@ -31,7 +31,7 @@ if(window.opera) {
 	// - When getting attributes, a string that's a number is return as type number.
 	// - If an array is supplied as first parameter, multiple values are returned
 	// as an object with values for each given attributes
-	
+
 	var proxied = jQuery.fn.attr, svgns = "http://www.w3.org/2000/svg";
 	jQuery.fn.attr = function(key, value) {
 		var len = this.length;
@@ -89,8 +89,11 @@ if(window.opera) {
 // config - An object that contains configuration data
 $.SvgCanvas = function(container, config)
 {
-var isOpera = !!window.opera,
-	isWebkit = navigator.userAgent.indexOf("AppleWebKit") != -1,
+var userAgent = navigator.userAgent, 
+	// Note: Browser sniffing should only be used if no other detection method is possible
+	isOpera = !!window.opera,
+	isWebkit = userAgent.indexOf("AppleWebKit") >= 0,
+	isGecko = userAgent.indexOf('Gecko/') >= 0,
 	
 	// Object populated later with booleans indicating support for features	
 	support = {},
@@ -115,7 +118,7 @@ var isOpera = !!window.opera,
 	"mask": ["class", "height", "id", "maskContentUnits", "maskUnits", "width", "x", "y"],
 	"metadata": ["class", "id"],
 	"path": ["class", "clip-path", "clip-rule", "d", "fill", "fill-opacity", "fill-rule", "filter", "id", "marker-end", "marker-mid", "marker-start", "mask", "opacity", "requiredFeatures", "stroke", "stroke-dasharray", "stroke-dashoffset", "stroke-linecap", "stroke-linejoin", "stroke-miterlimit", "stroke-opacity", "stroke-width", "style", "systemLanguage", "transform"],
-	"pattern": ["class", "height", "id", "patternContentUnits", "patternTransform", "patternUnits", "requiredFeatures", "style", "systemLanguage", "width", "x", "xlink:href", "y"],
+	"pattern": ["class", "height", "id", "patternContentUnits", "patternTransform", "patternUnits", "requiredFeatures", "style", "systemLanguage", "viewBox", "width", "x", "xlink:href", "y"],
 	"polygon": ["class", "clip-path", "clip-rule", "id", "fill", "fill-opacity", "fill-rule", "filter", "id", "class", "marker-end", "marker-mid", "marker-start", "mask", "opacity", "points", "requiredFeatures", "stroke", "stroke-dasharray", "stroke-dashoffset", "stroke-linecap", "stroke-linejoin", "stroke-miterlimit", "stroke-opacity", "stroke-width", "style", "systemLanguage", "transform"],
 	"polyline": ["class", "clip-path", "clip-rule", "id", "fill", "fill-opacity", "fill-rule", "filter", "marker-end", "marker-mid", "marker-start", "mask", "opacity", "points", "requiredFeatures", "stroke", "stroke-dasharray", "stroke-dashoffset", "stroke-linecap", "stroke-linejoin", "stroke-miterlimit", "stroke-opacity", "stroke-width", "style", "systemLanguage", "transform"],
 	"radialGradient": ["class", "cx", "cy", "fx", "fy", "gradientTransform", "gradientUnits", "id", "r", "requiredFeatures", "spreadMethod", "systemLanguage", "xlink:href"],
@@ -181,8 +184,13 @@ var isOpera = !!window.opera,
 		dimensions: [640, 480]
 	};
 	
-
 	
+	// Much faster than running getBBox() every time
+	var visElems = 'a,circle,ellipse,foreignObject,g,image,line,path,polygon,polyline,rect,svg,text,tspan,use';
+	var visElems_arr = visElems.split(',');
+// 	var hidElems = 'clipPath,defs,desc,feGaussianBlur,filter,linearGradient,marker,mask,metadata,pattern,radialGradient,stop,switch,symbol,title,textPath';
+	
+	var ref_attrs = ["clip-path", "fill", "filter", "marker-end", "marker-mid", "marker-start", "mask", "stroke"];
 
 
 // Update config with new one if given
@@ -390,23 +398,31 @@ var Utils = this.Utils = function() {
 			return {x:x, y:y, a:snapangle};
 		},
 		
+		// Function: snapToGrid
+		// round value to for snapping
+		"snapToGrid" : function(value){
+			var stepSize = curConfig.snappingStep;
+			value = Math.round(value/stepSize)*stepSize;
+			return value;
+		},
+
 		// Function: text2xml
 		// Cross-browser compatible method of converting a string to an XML tree
 		// found this function here: http://groups.google.com/group/jquery-dev/browse_thread/thread/c6d11387c580a77f
 		"text2xml": function(sXML) {
-			if(sXML.indexOf('<svg:svg') !== -1) {
+			if(sXML.indexOf('<svg:svg') >= 0) {
 				sXML = sXML.replace(/<(\/?)svg:/g, '<$1').replace('xmlns:svg', 'xmlns');
 			}
 		
 			var out;
 			try{
-				var dXML = ($.browser.msie)?new ActiveXObject("Microsoft.XMLDOM"):new DOMParser();
+				var dXML = (window.DOMParser)?new DOMParser():new ActiveXObject("Microsoft.XMLDOM");
 				dXML.async = false;
 			} catch(e){ 
 				throw new Error("XML Parser could not be instantiated"); 
 			};
 			try{
-				if($.browser.msie) out = (dXML.loadXML(sXML))?dXML:false;
+				if(dXML.loadXML) out = (dXML.loadXML(sXML))?dXML:false;
 				else out = dXML.parseFromString(sXML, "text/xml");
 			}
 			catch(e){ throw new Error("Error parsing XML string"); };
@@ -416,10 +432,11 @@ var Utils = this.Utils = function() {
 
 }();
 
+var snapToGrid = Utils.snapToGrid;
+var elData = $.data;
 	
 // TODO: declare the variables and set them as null, then move this setup stuff to
 // an initialization function - probably just use clear()
-
 var canvas = this,
 	
 	// Namespace constants
@@ -431,8 +448,8 @@ var canvas = this,
 	htmlns = "http://www.w3.org/1999/xhtml",
 	mathns = "http://www.w3.org/1998/Math/MathML",
 	
-	// Map of units, those set to 0 are updated later based on calculations
-	unit_types = {'em':0,'ex':0,'px':1,'cm':35.43307,'mm':3.543307,'in':90,'pt':1.25,'pc':15,'%':0},
+	// Map of units, updated later based on px conversion.
+	unit_types = {px: 1},
 
 	//nonce to uniquify id's
 	nonce = Math.floor(Math.random()*100001),
@@ -444,10 +461,10 @@ var canvas = this,
 	svgdoc = container.ownerDocument,
 	
 	// Array with width/height of canvas
-	dimensions = curConfig.dimensions,
+	dimensions = curConfig.dimensions;
 	
 	// Create Root SVG element. This is a container for the document being edited, not the document itself.
-	svgroot = svgdoc.importNode(Utils.text2xml('<svg id="svgroot" xmlns="' + svgns + '" xlinkns="' + xlinkns + '" ' +
+	var svgroot = svgdoc.importNode(Utils.text2xml('<svg id="svgroot" xmlns="' + svgns + '" xlinkns="' + xlinkns + '" ' +
 					'width="' + dimensions[0] + '" height="' + dimensions[1] + '" x="' + dimensions[0] + '" y="' + dimensions[1] + '" overflow="visible">' +
 					'<defs>' +
 						'<filter id="canvashadow" filterUnits="objectBoundingBox">' +
@@ -460,7 +477,6 @@ var canvas = this,
 						'</filter>'+
 					'</defs>'+
 				'</svg>').documentElement, true);
-				
 
 	container.appendChild(svgroot);
 	
@@ -501,7 +517,7 @@ var svgWhiteListNS = {};
 $.each(svgWhiteList, function(elt,atts){
 	var attNS = {};
 	$.each(atts, function(i, att){
-		if (att.indexOf(':') != -1) {
+		if (att.indexOf(':') >= 0) {
 			var v = att.split(':');
 			attNS[v[1]] = nsRevMap[v[0]];
 		} else {
@@ -523,7 +539,7 @@ $(opac_ani).attr({
 // Group: Unit conversion functions
 
 // Set the scope for these functions
-var convertToNum, convertToUnit, setUnitAttr;
+var convertToNum, convertToUnit, setUnitAttr, unitConvertAttrs;
 
 (function() {
 	var w_attrs = ['x', 'x1', 'cx', 'rx', 'width'];
@@ -547,9 +563,9 @@ var convertToNum, convertToUnit, setUnitAttr;
 			var num = val.substr(0, val.length-1)/100;
 			var res = getResolution();
 			
-			if($.inArray(attr, w_attrs) !== -1) {
+			if(w_attrs.indexOf(attr) >= 0) {
 				return num * res.w;
-			} else if($.inArray(attr, h_attrs) !== -1) {
+			} else if(h_attrs.indexOf(attr) >= 0) {
 				return num * res.h;
 			} else {
 				return num * Math.sqrt((res.w*res.w) + (res.h*res.h))/Math.sqrt(2);
@@ -575,23 +591,26 @@ var convertToNum, convertToUnit, setUnitAttr;
 			// New value is a number, so check currently used unit
 			var old_val = elem.getAttribute(attr);
 			
-			if(old_val !== null && isNaN(old_val)) {
+			if(old_val !== null && (isNaN(old_val) || curConfig.baseUnit !== 'px')) {
 				// Old value was a number, so get unit, then convert
 				var unit;
 				if(old_val.substr(-1) === '%') {
 					var res = getResolution();
 					unit = '%';
 					val *= 100;
-					if($.inArray(attr, w_attrs) !== -1) {
+					if(w_attrs.indexOf(attr) >= 0) {
 						val = val / res.w;
-					} else if($.inArray(attr, h_attrs) !== -1) {
+					} else if(h_attrs.indexOf(attr) >= 0) {
 						val = val / res.h;
 					} else {
 						return val / Math.sqrt((res.w*res.w) + (res.h*res.h))/Math.sqrt(2);
 					}
-
 				} else {
-					unit = old_val.substr(-2);
+					if(curConfig.baseUnit !== 'px') {
+						unit = curConfig.baseUnit;
+					} else {
+						unit = old_val.substr(-2);
+					}
 					val = val / unit_types[unit];
 				}
 				
@@ -609,7 +628,7 @@ var convertToNum, convertToUnit, setUnitAttr;
 	// val - String with the attribute value to check
 	canvas.isValidUnit = function(attr, val) {
 		var valid = false;
-		if($.inArray(attr, unit_attrs) != -1) {
+		if(unit_attrs.indexOf(attr) >= 0) {
 			// True if it's just a number
 			if(!isNaN(val)) {
 				valid = true;
@@ -641,8 +660,74 @@ var convertToNum, convertToUnit, setUnitAttr;
 		return valid;
 	}
 	
+	// Function: getUnits
+	// Returns the unit object with values for each unit
+	canvas.getUnits = function() {
+		return unit_types;
+	}
+	
+	// Function: unitConvertAttrs
+	// Converts all applicable attributes to the given baseUnit
+	unitConvertAttrs = canvas.unitConvertAttrs = function(element) {
+		var elName = element.tagName;
+		var unit = curConfig.baseUnit;
+		var attrs;
+		switch (elName)
+		{
+			case "line":
+				attrs = ['x1', 'x2', 'y1', 'y2'];
+				break;
+			case "circle":
+				attrs = ['cx', 'cy', 'r'];
+				break;
+			case "ellipse":
+				attrs = ['cx', 'cy', 'rx', 'ry'];
+				break;
+			case "foreignObject":
+			case "rect":
+			case "image":
+			case "use":
+				attrs = ['x', 'y', 'width', 'height'];
+				break;
+			case "text":
+				attrs = ['x', 'y'];
+				break;
+		}
+		if(!attrs) return;
+		var len = attrs.length
+		for(var i = 0; i < len; i++) {
+			var attr = attrs[i];
+			var cur = element.getAttribute(attr);
+			if(cur) {
+				if(!isNaN(cur)) {
+					element.setAttribute(attr, (cur / unit_types[unit]) + unit);
+				} else {
+					// Convert existing?
+				}
+			}
+		}
+		
+		
+	}
+	
 })();
 
+
+var restoreRefElems = function(elem) {
+	// Look for missing reference elements, restore any found
+	var attrs = $(elem).attr(ref_attrs);
+	for(var o in attrs) {
+		var val = attrs[o];
+		if (val && val.indexOf('url(') === 0) {
+			var id = getUrlFromAttr(val).substr(1);
+			var ref = getElem(id);
+			if(!ref) {
+				findDefs().appendChild(removedElements[id]);
+				delete removedElements[id];
+			}
+		}
+	}
+}
 
 // Group: Undo/Redo history management
 
@@ -663,7 +748,7 @@ var ChangeElementCommand = this.undoCmd.changeElement = function(elem, attrs, te
 	this.oldValues = attrs;
 	for (var attr in attrs) {
 		if (attr == "#text") this.newValues[attr] = elem.textContent;
-		else if (attr == "#href") this.newValues[attr] = elem.getAttributeNS(xlinkns, "href");
+		else if (attr == "#href") this.newValues[attr] = getHref(elem);
 		else this.newValues[attr] = elem.getAttribute(attr);
 	}
 
@@ -674,7 +759,7 @@ var ChangeElementCommand = this.undoCmd.changeElement = function(elem, attrs, te
 		for(var attr in this.newValues ) {
 			if (this.newValues[attr]) {
 				if (attr == "#text") this.elem.textContent = this.newValues[attr];
-				else if (attr == "#href") this.elem.setAttributeNS(xlinkns, "xlink:href", this.newValues[attr])
+				else if (attr == "#href") setHref(this.elem, this.newValues[attr])
 				else this.elem.setAttribute(attr, this.newValues[attr]);
 			}
 			else {
@@ -716,7 +801,7 @@ var ChangeElementCommand = this.undoCmd.changeElement = function(elem, attrs, te
 		for(var attr in this.oldValues ) {
 			if (this.oldValues[attr]) {
 				if (attr == "#text") this.elem.textContent = this.oldValues[attr];
-				else if (attr == "#href") this.elem.setAttributeNS(xlinkns, "xlink:href", this.oldValues[attr]);
+				else if (attr == "#href") setHref(this.elem, this.oldValues[attr]);
 				else this.elem.setAttribute(attr, this.oldValues[attr]);
 				
 				if (attr == "stdDeviation") canvas.setBlurOffsets(this.elem.parentNode, this.oldValues[attr]);
@@ -773,6 +858,9 @@ var InsertElementCommand = this.undoCmd.insertElement = function(elem, text) {
 	// Re-Inserts the new element
 	this.apply = function() { 
 		this.elem = this.parent.insertBefore(this.elem, this.elem.nextSibling); 
+		
+		restoreRefElems(this.elem);
+		
 		if (this.parent == svgcontent) {
 			identifyLayers();
 		}		
@@ -826,8 +914,11 @@ var RemoveElementCommand = this.undoCmd.removeElement = function(elem, parent, t
 			delete svgTransformLists[this.elem.id];
 		}
 
-		this.elem = this.parent.insertBefore(this.elem, this.elem.nextSibling); 
-		if (this.parent == svgcontent) {
+		this.parent.insertBefore(this.elem, this.elem.nextSibling);
+		
+		restoreRefElems(this.elem);
+		
+		if (this.parent === svgcontent) {
 			identifyLayers();
 		}		
 	};
@@ -938,22 +1029,22 @@ var BatchCommand = this.undoCmd.batch = function(text) {
 	this.isEmpty = function() { return this.stack.length == 0; };
 }
 
-// Set scope for these undo functions
-var resetUndoStack, addCommandToHistory;
+// Set scope for addCommandToHistory
+var addCommandToHistory;
 
 // Undo/redo stack related functions
 (function(c) {
 	var undoStackPointer = 0, 
 		undoStack = [];
 	
-	// Function: resetUndoStack
-	// Resets the undo stack, effectively clearing the undo/redo history
-	resetUndoStack = function() {
-		undoStack = [];
-		undoStackPointer = 0;
-	};
-	
 	c.undoMgr = {
+		// Function: undoMgr.resetUndoStack
+		// Resets the undo stack, effectively clearing the undo/redo history
+		resetUndoStack: function() {
+			undoStack = [];
+			undoStackPointer = 0;
+		},
+	
 		// Function: undoMgr.getUndoStackSize
 		// Returns: 
 		// Integer with the current size of the undo history stack
@@ -1142,58 +1233,17 @@ var SelectorManager;
 								}
 							}) );
 
-		// this holds a reference to the grip elements for this selector
-		this.selectorGrips = {	"nw":null,
-								"n":null,
-								"ne":null,
-								"e":null,
-								"se":null,
-								"s":null,
-								"sw":null,
-								"w":null
-								};
-		this.rotateGripConnector = this.selectorGroup.appendChild( addSvgElementFromJson({
-							"element": "line",
-							"attr": {
-								"id": ("selectorGrip_rotateconnector_" + this.id),
-								"stroke": "#22C",
-								"stroke-width": "1"
-							}
-						}) );
-						
-		this.rotateGrip = this.selectorGroup.appendChild( addSvgElementFromJson({
-							"element": "circle",
-							"attr": {
-								"id": ("selectorGrip_rotate_" + this.id),
-								"fill": "lime",
-								"r": 4,
-								"stroke": "#22C",
-								"stroke-width": 2,
-								"style": "cursor:url(" + curConfig.imgPath + "rotate.png) 12 12, auto;"
-							}
-						}) );
+		// this holds a reference to the grip coordinates for this selector
+		this.gripCoords = {	"nw":null,
+							"n":null,
+							"ne":null,
+							"e":null,
+							"se":null,
+							"s":null,
+							"sw":null,
+							"w":null
+							};
 		
-		// add the corner grips
-		for (var dir in this.selectorGrips) {
-			this.selectorGrips[dir] = this.selectorGroup.appendChild( 
-				addSvgElementFromJson({
-					"element": "circle",
-					"attr": {
-						"id": ("selectorGrip_resize_" + dir + "_" + this.id),
-						"fill": "#22C",
-						"r": 4,
-						"style": ("cursor:" + dir + "-resize"),
-						// This expands the mouse-able area of the grips making them
-						// easier to grab with the mouse.
-						// This works in Opera and WebKit, but does not work in Firefox
-						// see https://bugzilla.mozilla.org/show_bug.cgi?id=500174
-						"stroke-width": 2,
-						"pointer-events":"all",
-						"display":"none"
-					}
-				}) );
-		}
-
 		// Function: Selector.showGrips
 		// Show the resize grips of this selector
 		//
@@ -1202,13 +1252,12 @@ var SelectorManager;
 		this.showGrips = function(show) {
 			// TODO: use suspendRedraw() here
 			var bShow = show ? "inline" : "none";
-			this.rotateGrip.setAttribute("display", bShow);
-			this.rotateGripConnector.setAttribute("display", bShow);
+			selectorManager.selectorGripsGroup.setAttribute("display", bShow);
 			var elem = this.selectedElement;
-			for (var dir in this.selectorGrips) {
-				this.selectorGrips[dir].setAttribute("display", bShow);
+			if(elem && show) {
+				this.selectorGroup.appendChild(selectorManager.selectorGripsGroup);
+				this.updateGripCursors(getRotationAngle(elem));
 			}
-			if(elem) this.updateGripCursors(getRotationAngle(elem));
 		};
 		
 		// Function: Selector.updateGripCursors
@@ -1220,7 +1269,7 @@ var SelectorManager;
 			var dir_arr = [];
 			var steps = Math.round(angle / 45);
 			if(steps < 0) steps += 8;
-			for (var dir in this.selectorGrips) {
+			for (var dir in selectorManager.selectorGrips) {
 				dir_arr.push(dir);
 			}
 			while(steps > 0) {
@@ -1228,8 +1277,8 @@ var SelectorManager;
 				steps--;
 			}
 			var i = 0;
-			for (var dir in this.selectorGrips) {
-				this.selectorGrips[dir].setAttribute('style', ("cursor:" + dir_arr[i] + "-resize"));
+			for (var dir in selectorManager.selectorGrips) {
+				selectorManager.selectorGrips[dir].setAttribute('style', ("cursor:" + dir_arr[i] + "-resize"));
 				i++;
 			};
 		};
@@ -1238,13 +1287,15 @@ var SelectorManager;
 		// Updates the selector to match the element's size
 		this.resize = function() {
 			var selectedBox = this.selectorRect,
-				selectedGrips = this.selectorGrips,
+				mgr = selectorManager,
+				selectedGrips = mgr.selectorGrips,
 				selected = this.selectedElement,
 				 sw = selected.getAttribute("stroke-width");
 			var offset = 1/current_zoom;
 			if (selected.getAttribute("stroke") != "none" && !isNaN(sw)) {
 				offset += (sw/2);
 			}
+			
 			if (selected.tagName == "text") {
 				offset += 2/current_zoom;
 			}
@@ -1254,9 +1305,11 @@ var SelectorManager;
 				// get the bbox based on its children. 
 				var stroked_bbox = getStrokedBBox(selected.childNodes);
 				if(stroked_bbox) {
+					var bb = {};
 					$.each(bbox, function(key, val) {
-						bbox[key] = stroked_bbox[key];
+						bb[key] = stroked_bbox[key];
 					});
+					bbox = bb;
 				}
 			}
 
@@ -1269,22 +1322,24 @@ var SelectorManager;
 			m.f *= current_zoom;
 			
 			// apply the transforms
-			var l=bbox.x-offset, t=bbox.y-offset, w=bbox.width+(offset*2), h=bbox.height+(offset*2),
+			var l=bbox.x, t=bbox.y, w=bbox.width, h=bbox.height,
 				bbox = {x:l, y:t, width:w, height:h};
+
 			
 			// we need to handle temporary transforms too
 			// if skewed, get its transformed box, then find its axis-aligned bbox
 			
 			//*
 			var nbox = transformBox(l*current_zoom, t*current_zoom, w*current_zoom, h*current_zoom, m),
-				nbax = nbox.aabox.x,
-				nbay = nbox.aabox.y,
-				nbaw = nbox.aabox.width,
-				nbah = nbox.aabox.height;
+				nbax = nbox.aabox.x - offset,
+				nbay = nbox.aabox.y - offset,
+				nbaw = nbox.aabox.width + (offset * 2),
+				nbah = nbox.aabox.height + (offset * 2);
 				
 			// now if the shape is rotated, un-rotate it
 			var cx = nbax + nbaw/2,
 				cy = nbay + nbah/2;
+				
 			var angle = getRotationAngle(selected);
 			if (angle) {
 				
@@ -1302,10 +1357,10 @@ var SelectorManager;
 					maxx = nbox.tl.x,
 					maxy = nbox.tl.y;
 				
-				minx = Math.min(minx, Math.min(nbox.tr.x, Math.min(nbox.bl.x, nbox.br.x) ) );
-				miny = Math.min(miny, Math.min(nbox.tr.y, Math.min(nbox.bl.y, nbox.br.y) ) );
-				maxx = Math.max(maxx, Math.max(nbox.tr.x, Math.max(nbox.bl.x, nbox.br.x) ) );
-				maxy = Math.max(maxy, Math.max(nbox.tr.y, Math.max(nbox.bl.y, nbox.br.y) ) );
+				minx = Math.min(minx, Math.min(nbox.tr.x, Math.min(nbox.bl.x, nbox.br.x) ) ) - offset;
+				miny = Math.min(miny, Math.min(nbox.tr.y, Math.min(nbox.bl.y, nbox.br.y) ) ) - offset;
+				maxx = Math.max(maxx, Math.max(nbox.tr.x, Math.max(nbox.bl.x, nbox.br.x) ) ) + offset;
+				maxy = Math.max(maxy, Math.max(nbox.tr.y, Math.max(nbox.bl.y, nbox.br.y) ) ) + offset;
 				
 				nbax = minx;
 				nbay = miny;
@@ -1321,7 +1376,7 @@ var SelectorManager;
 						+ " " + nbax + "," + (nbay+nbah) + "z";
 			assignAttributes(selectedBox, {'d': dstr});
 			
-			var gripCoords = {
+			this.gripCoords = {
 				nw: [nbax, nbay],
 				ne: [nbax+nbaw, nbay],
 				sw: [nbax, nbay+nbah],
@@ -1333,8 +1388,8 @@ var SelectorManager;
 			};
 			
 			if(selected == selectedElements[0]) {
-				for(var dir in gripCoords) {
-					var coords = gripCoords[dir];
+				for(var dir in this.gripCoords) {
+					var coords = this.gripCoords[dir];
 					assignAttributes(selectedGrips[dir], {
 						cx: coords[0], cy: coords[1]
 					});
@@ -1349,11 +1404,11 @@ var SelectorManager;
 			}
 
 			// we want to go 20 pixels in the negative transformed y direction, ignoring scale
-			assignAttributes(this.rotateGripConnector, { x1: nbax + (nbaw)/2, 
+			assignAttributes(mgr.rotateGripConnector, { x1: nbax + (nbaw)/2, 
 														y1: nbay, 
 														x2: nbax + (nbaw)/2, 
 														y2: nbay- 20});
-			assignAttributes(this.rotateGrip, { cx: nbax + (nbaw)/2, 
+			assignAttributes(mgr.rotateGrip, { cx: nbax + (nbaw)/2, 
 												cy: nbay - 20 });
 			
 			svgroot.unsuspendRedraw(sr_handle);
@@ -1392,11 +1447,71 @@ var SelectorManager;
 			// create parent selector group and add it to svgroot
 			mgr.selectorParentGroup = svgdoc.createElementNS(svgns, "g");
 			mgr.selectorParentGroup.setAttribute("id", "selectorParentGroup");
+			mgr.selectorGripsGroup = svgdoc.createElementNS(svgns, "g");
+			mgr.selectorGripsGroup.setAttribute('display','none');
 			svgroot.appendChild(mgr.selectorParentGroup);
+			mgr.selectorParentGroup.appendChild(mgr.selectorGripsGroup);
 			mgr.selectorMap = {};
 			mgr.selectors = [];
 			mgr.rubberBandBox = null;
 			
+			// this holds a reference to the grip elements
+			mgr.selectorGrips = {	"nw":null,
+									"n":null,
+									"ne":null,
+									"e":null,
+									"se":null,
+									"s":null,
+									"sw":null,
+									"w":null
+									};
+
+			// add the corner grips
+			for (var dir in mgr.selectorGrips) {
+				var grip = addSvgElementFromJson({
+					"element": "circle",
+					"attr": {
+						"id": ("selectorGrip_resize_" + dir),
+						"fill": "#22C",
+						"r": 4,
+						"style": ("cursor:" + dir + "-resize"),
+						// This expands the mouse-able area of the grips making them
+						// easier to grab with the mouse.
+						// This works in Opera and WebKit, but does not work in Firefox
+						// see https://bugzilla.mozilla.org/show_bug.cgi?id=500174
+						"stroke-width": 2,
+						"pointer-events":"all"
+					}
+				});
+				
+				elData(grip, "dir", dir);
+				elData(grip, "type", "resize");
+				this.selectorGrips[dir] = mgr.selectorGripsGroup.appendChild(grip);
+			}
+			
+			// add rotator elems
+			this.rotateGripConnector = this.selectorGripsGroup.appendChild( addSvgElementFromJson({
+								"element": "line",
+								"attr": {
+									"id": ("selectorGrip_rotateconnector"),
+									"stroke": "#22C",
+									"stroke-width": "1"
+								}
+							}) );
+							
+			this.rotateGrip = this.selectorGripsGroup.appendChild( addSvgElementFromJson({
+								"element": "circle",
+								"attr": {
+									"id": "selectorGrip_rotate",
+									"fill": "lime",
+									"r": 4,
+									"stroke": "#22C",
+									"stroke-width": 2,
+									"style": "cursor:url(" + curConfig.imgPath + "rotate.png) 12 12, auto;"
+								}
+							}) );
+			elData(this.rotateGrip, "type", "rotate");
+
 			if($("#canvasBackground").length) return;
 	
 			var canvasbg = svgdoc.createElementNS(svgns, "svg");
@@ -1422,6 +1537,7 @@ var SelectorManager;
 				'fill': '#FFF',
 				'style': 'pointer-events:none'
 			});
+			
 			// Both Firefox and WebKit are too slow with this filter region (especially at higher
 			// zoom levels) and Opera has at least one bug
 	//			if (!window.opera) rect.setAttribute('filter', 'url(#canvashadow)');
@@ -1592,6 +1708,7 @@ var SVGEditTransformList = function(elem) {
 				var bits = x.split(/\s*\(/);
 				var name = bits[0];
 				var val_bits = bits[1].match(/\s*(.*?)\s*\)/);
+				val_bits[1] = val_bits[1].replace(/(\d)-/g, "$1 -");
 				var val_arr = val_bits[1].split(/[, ]+/);
 				var letters = 'abcdef'.split('');
 				var mtx = svgroot.createSVGMatrix();
@@ -1742,11 +1859,11 @@ var assignAttributes = this.assignAttributes = function(node, attrs, suspendLeng
 	if(!suspendLength) suspendLength = 0;
 	// Opera has a problem with suspendRedraw() apparently
 	var handle = null;
-	if (!window.opera) svgroot.suspendRedraw(suspendLength);
+	if (!isOpera) svgroot.suspendRedraw(suspendLength);
 
 	for (var i in attrs) {
-		var ns = (i.substr(0,4) == "xml:" ? xmlns : 
-			i.substr(0,6) == "xlink:" ? xlinkns : null);
+		var ns = (i.substr(0,4) === "xml:" ? xmlns : 
+			i.substr(0,6) === "xlink:" ? xlinkns : null);
 			
 		if(ns || !unitCheck) {
 			node.setAttributeNS(ns, i, attrs[i]);
@@ -1811,7 +1928,7 @@ var addSvgElementFromJson = this.addSvgElementFromJson = function(data) {
 	if (!shape) {
 		shape = svgdoc.createElementNS(svgns, data.element);
 		if (current_layer) {
-			current_layer.appendChild(shape);
+			(current_group || current_layer).appendChild(shape);
 		}
 	}
 	if(data.curStyles) {
@@ -1843,7 +1960,7 @@ var addSvgElementFromJson = this.addSvgElementFromJson = function(data) {
 	//	var svgthumb = svgdoc.createElementNS(svgns, "use");
 	//	svgthumb.setAttribute('width', '100');
 	//	svgthumb.setAttribute('height', '100');
-	//	svgthumb.setAttributeNS(xlinkns, 'href', '#svgcontent');
+	//	setHref(svgthumb, '#svgcontent');
 	//	svgroot.appendChild(svgthumb);
 
 })();
@@ -1860,6 +1977,12 @@ var all_layers = [],
 	
 	// pointer to the current layer <g>
 	current_layer = null,
+	
+	// pointer to current group (for in-group editing)
+	current_group = null,
+	
+	// Array with current disabled elements (for in-group editing)
+	disabled_elems = [],
 	
 	// Object with save options
 	save_options = {round_digits: 5},
@@ -1936,7 +2059,16 @@ var cur_shape = all_properties.shape,
 	curBBoxes = [],
 	
 	// Object to contain all included extensions
-	extensions = {};
+	extensions = {},
+	
+	// Canvas point for the most recent right click
+	lastClickPoint = null,
+	
+	// Map of deleted reference elements
+	removedElements = {}
+
+// Clipboard for cut, copy&pasted elements
+canvas.clipBoard = [];
 
 // Should this return an array by default, so extension results aren't overwritten?
 var runExtensions = this.runExtensions = function(action, vars, returnArray) {
@@ -1996,6 +2128,8 @@ var shortFloat = function(val) {
 		return Number(Number(val).toFixed(digits));
 	} else if($.isArray(val)) {
 		return shortFloat(val[0]) + ',' + shortFloat(val[1]);
+	} else {
+		return parseFloat(val).toFixed(digits) - 0;
 	}
 }
 	
@@ -2016,23 +2150,33 @@ var round = this.round = function(val) {
 var getIntersectionList = this.getIntersectionList = function(rect) {
 	if (rubberBox == null) { return null; }
 
+	var parent = current_group || current_layer;
+	
 	if(!curBBoxes.length) {
 		// Cache all bboxes
-		curBBoxes = getVisibleElements(current_layer, true);
+		curBBoxes = getVisibleElements(parent, true);
 	}
 	
 	var resultList = null;
 	try {
-		resultList = current_layer.getIntersectionList(rect, null);
+		resultList = parent.getIntersectionList(rect, null);
 	} catch(e) { }
 
 	if (resultList == null || typeof(resultList.item) != "function") {
 		resultList = [];
-
-		var rubberBBox = rubberBox.getBBox();
-		$.each(rubberBBox, function(key, val) {
-			rubberBBox[key] = val / current_zoom;
-		});
+		
+		if(!rect) {
+			var rubberBBox = rubberBox.getBBox();
+			var bb = {};
+			
+			for(var o in rubberBBox) {
+				bb[o] = rubberBBox[o] / current_zoom;
+			}
+			rubberBBox = bb;
+			
+		} else {
+			var rubberBBox = rect;
+		}
 		var i = curBBoxes.length;
 		while (i--) {
 			if(!rubberBBox.width || !rubberBBox.width) continue;
@@ -2077,7 +2221,7 @@ var getStrokedBBox = this.getStrokedBBox = function(elems) {
 				
 				// Get the BBox from the raw path for these elements
 				var elemNames = ['ellipse','path','line','polyline','polygon'];
-				if($.inArray(elem.tagName, elemNames) != -1) {
+				if(elemNames.indexOf(elem.tagName) >= 0) {
 					bb = good_bb = canvas.convertToPath(elem, true);
 				} else if(elem.tagName == 'rect') {
 					// Look for radius
@@ -2089,12 +2233,13 @@ var getStrokedBBox = this.getStrokedBBox = function(elems) {
 				}
 				
 				if(!good_bb) {
+					// Must use clone else FF freaks out
+					var clone = elem.cloneNode(true); 
 					var g = document.createElementNS(svgns, "g");
 					var parent = elem.parentNode;
-					parent.replaceChild(g, elem);
-					g.appendChild(elem);
+					parent.appendChild(g);
+					g.appendChild(clone);
 					bb = g.getBBox();
-					parent.insertBefore(elem,g);
 					parent.removeChild(g);
 				}
 				
@@ -2132,7 +2277,6 @@ var getStrokedBBox = this.getStrokedBBox = function(elems) {
 // 						bb.width = rmaxx - rminx;
 // 						bb.height = rmaxy - rminy;
 			}
-		
 			return bb;
 		} catch(e) { 
 			console.log(elem, e);
@@ -2145,6 +2289,12 @@ var getStrokedBBox = this.getStrokedBBox = function(elems) {
 		if(full_bb) return;
 		if(!this.parentNode) return;
 		full_bb = getCheckedBBox(this);
+		if(full_bb) {
+			var b = {};
+			for(var i in full_bb) b[i] = full_bb[i];
+			full_bb = b;
+		}
+
 	});
 	
 	// This shouldn't ever happen...
@@ -2237,7 +2387,6 @@ var groupSvgElem = this.groupSvgElem = function(elem) {
 	$(g).append(elem).data('gsvg', elem)[0].id = getNextId();
 }
 
-
 // Function: copyElem
 // Create a clone of an element, updating its ID and its children's IDs when needed
 //
@@ -2299,11 +2448,6 @@ var copyElem = function(el) {
 // Parameters:
 // id - String with the element's new ID
 function getElem(id) {
-// 	if(svgroot.getElementById) {
-// 		// getElementById lookup
-// 		return svgroot.getElementById(id);
-// 	} else 
-	
 	if(svgroot.querySelector) {
 		// querySelector lookup
 		return svgroot.querySelector('#'+id);
@@ -2354,6 +2498,7 @@ var getId, getNextId;
 		return id;
 	};
 	
+	// Function: call
 	// Run the callback function associated with the given event
 	//
 	// Parameters:
@@ -2446,6 +2591,18 @@ var sanitizeSvg = this.sanitizeSvg = function(node) {
 				node.setAttribute('d',pathActions.convertPath(node));
 				pathActions.fixEnd(node);
 			}
+			
+			// Add spaces before negative signs where necessary
+			if(isGecko) {
+				switch ( attrName ) {
+				case "transform":
+				case "gradientTransform":
+				case "patternTransform":
+					var val = attr.nodeValue.replace(/(\d)-/g, "$1 -");
+					node.setAttribute(attrName, val);
+				}
+			}
+			
 			// for the style attribute, rewrite it in terms of XML presentational attributes
 			if (attrName == "style") {
 				var props = attr.nodeValue.split(";"),
@@ -2453,7 +2610,7 @@ var sanitizeSvg = this.sanitizeSvg = function(node) {
 				while(p--) {
 					var nv = props[p].split(":");
 					// now check that this attribute is supported
-					if (allowedAttrs.indexOf(nv[0]) != -1) {
+					if (allowedAttrs.indexOf(nv[0]) >= 0) {
 						node.setAttribute(nv[0],nv[1]);
 					}
 				}
@@ -2467,21 +2624,21 @@ var sanitizeSvg = this.sanitizeSvg = function(node) {
 		
 		// for some elements that have a xlink:href, ensure the URI refers to a local element
 		// (but not for links)
-		var href = node.getAttributeNS(xlinkns,"href");
+		var href = getHref(node);
 		if(href && 
-		   $.inArray(node.nodeName, ["filter", "linearGradient", "pattern", 
-									 "radialGradient", "textPath", "use"]) != -1)
+		   ["filter", "linearGradient", "pattern",
+		   "radialGradient", "textPath", "use"].indexOf(node.nodeName) >= 0)
 		{
 			// TODO: we simply check if the first character is a #, is this bullet-proof?
 			if (href[0] != "#") {
 				// remove the attribute (but keep the element)
-				node.setAttributeNS(xlinkns, "xlink:href", "");
+				setHref(node, "");
 				node.removeAttributeNS(xlinkns, "href");
 			}
 		}
 		
 		// Safari crashes on a <use> without a xlink:href, so we just remove the node here
-		if (node.nodeName == "use" && !node.getAttributeNS(xlinkns,"href")) {
+		if (node.nodeName == "use" && !getHref(node)) {
 			parent.removeChild(node);
 			return;
 		}
@@ -2492,7 +2649,7 @@ var sanitizeSvg = this.sanitizeSvg = function(node) {
 			if (val) {
 				val = getUrlFromAttr(val);
 				// simply check for first character being a '#'
-				if (val && val[0] != "#") {
+				if (val && val[0] !== "#") {
 					node.setAttribute(attr, "");
 					node.removeAttribute(attr);
 				}
@@ -2537,19 +2694,28 @@ var sanitizeSvg = this.sanitizeSvg = function(node) {
 var getUrlFromAttr = this.getUrlFromAttr = function(attrVal) {
 	if (attrVal) {		
 		// url("#somegrad")
-		if (attrVal.indexOf('url("') == 0) {
+		if (attrVal.indexOf('url("') === 0) {
 			return attrVal.substring(5,attrVal.indexOf('"',6));
 		}
 		// url('#somegrad')
-		else if (attrVal.indexOf("url('") == 0) {
+		else if (attrVal.indexOf("url('") === 0) {
 			return attrVal.substring(5,attrVal.indexOf("'",6));
 		}
-		else if (attrVal.indexOf("url(") == 0) {
+		else if (attrVal.indexOf("url(") === 0) {
 			return attrVal.substring(4,attrVal.indexOf(')'));
 		}
 	}
 	return null;
 };
+
+// Function getRefElem
+// Get the reference element associated with the given attribute value
+//
+// Parameters:
+// attrVal - The attribute value as a string
+var getRefElem = this.getRefElem = function(attrVal) {
+	return getElem(getUrlFromAttr(attrVal).substr(1));
+}
 
 // Function: getBBox
 // Get the given/selected element's bounding box object, convert it to be more
@@ -2561,22 +2727,24 @@ var getBBox = this.getBBox = function(elem) {
 	var selected = elem || selectedElements[0];
 	if (elem.nodeType != 1) return null;
 	var ret = null;
-	if(elem.nodeName == 'text' && selected.textContent == '') {
+	var elname = selected.nodeName;
+	
+	if(elname === 'text' && selected.textContent === '') {
 		selected.textContent = 'a'; // Some character needed for the selector to use.
 		ret = selected.getBBox();
 		selected.textContent = '';
-	} else if(elem.nodeName == 'path' && isWebkit) {
+	} else if(elname === 'path' && isWebkit) {
 		ret = getPathBBox(selected);
-	} else if(elem.nodeName == 'use' && !isWebkit) {
+	} else if(elname === 'use' && !isWebkit || elname === 'foreignObject') {
 		ret = selected.getBBox();
-		ret.x += parseFloat(selected.getAttribute('x')||0);
-		ret.y += parseFloat(selected.getAttribute('y')||0);
-	} else if(elem.nodeName == 'foreignObject') {
-		ret = selected.getBBox();
-		ret.x += parseFloat(selected.getAttribute('x')||0);
-		ret.y += parseFloat(selected.getAttribute('y')||0);
-	} else {
-		try { ret = selected.getBBox(); } 
+		var bb = {};
+		bb.width = ret.width;
+		bb.height = ret.height;
+		bb.x = ret.x + parseFloat(selected.getAttribute('x')||0);
+		bb.y = ret.y + parseFloat(selected.getAttribute('y')||0);
+		ret = bb;
+	} else if(~visElems_arr.indexOf(elname)) {
+		try { ret = selected.getBBox();} 
 		catch(e) { 
 			// Check if element is child of a foreignObject
 			var fo = $(selected).closest("foreignObject");
@@ -2606,7 +2774,7 @@ var getBBox = this.getBBox = function(elem) {
 // Parameters: 
 // elem - The (text) DOM element to clone
 var ffClone = function(elem) {
-	if(navigator.userAgent.indexOf('Gecko/') == -1) return elem;
+	if(isGecko) return elem;
 	var clone = elem.cloneNode(true)
 	elem.parentNode.insertBefore(clone, elem);
 	elem.parentNode.removeChild(elem);
@@ -2759,7 +2927,11 @@ this.setRotationAngle = function(val, preventUndo) {
 		var center = transformPoint(cx,cy,transformListToTransform(tlist).matrix);
 		var R_nc = svgroot.createSVGTransform();
 		R_nc.setRotate(val, center.x, center.y);
-		tlist.insertItemBefore(R_nc,0);
+		if(tlist.numberOfItems) {
+			tlist.insertItemBefore(R_nc, 0);
+		} else {
+			tlist.appendItem(R_nc);
+		}
 	}
 	else if (tlist.numberOfItems == 0) {
 		elem.removeAttribute("transform");
@@ -2808,6 +2980,10 @@ var getTransformList = this.getTransformList = function(elem) {
 	else if (elem.gradientTransform) {
 		return elem.gradientTransform.baseVal;
 	}
+	else if (elem.patternTransform) {
+		return elem.patternTransform.baseVal;
+	}
+
 	return null;
 };
 
@@ -2851,82 +3027,159 @@ var logMatrix = function(m) {
 // changes - Object with changes to be remapped
 // m - Matrix object to use for remapping coordinates
 var remapElement = this.remapElement = function(selected,changes,m) {
+
 	var remap = function(x,y) { return transformPoint(x,y,m); },
 		scalew = function(w) { return m.a*w; },
 		scaleh = function(h) { return m.d*h; },
+		doSnapping = curConfig.gridSnapping && selected.parentNode.parentNode.localName === "svg",
+		finishUp = function() {
+			if(doSnapping) for(var o in changes) changes[o] = snapToGrid(changes[o]);
+			assignAttributes(selected, changes, 1000, true);
+		}
 		box = getBBox(selected);
+	
+	for(var i = 0; i < 2; i++) {
+		var type = i === 0 ? 'fill' : 'stroke';
+		var attrVal = selected.getAttribute(type);
+		if(attrVal && attrVal.indexOf('url(') === 0) {
+			if(m.a < 0 || m.d < 0) {
+				var grad = getRefElem(attrVal);
+				var newgrad = grad.cloneNode(true);
+	
+				if(m.a < 0) {
+					//flip x
+					var x1 = newgrad.getAttribute('x1');
+					var x2 = newgrad.getAttribute('x2');
+					newgrad.setAttribute('x1', -(x1 - 1));
+					newgrad.setAttribute('x2', -(x2 - 1));
+				} 
+				
+				if(m.d < 0) {
+					//flip y
+					var y1 = newgrad.getAttribute('y1');
+					var y2 = newgrad.getAttribute('y2');
+					newgrad.setAttribute('y1', -(y1 - 1));
+					newgrad.setAttribute('y2', -(y2 - 1));
+				}
+				newgrad.id = getNextId();
+				findDefs().appendChild(newgrad);
+				selected.setAttribute(type, 'url(#' + newgrad.id + ')');
+			}
+		}
+		
+	}
 
-	switch (selected.tagName)
+
+	var elName = selected.tagName;
+	if(elName === "g" || elName === "text" || elName === "use") {
+		// if it was a translate, then just update x,y
+		if (m.a == 1 && m.b == 0 && m.c == 0 && m.d == 1 && 
+			(m.e != 0 || m.f != 0) ) 
+		{
+			// [T][M] = [M][T']
+			// therefore [T'] = [M_inv][T][M]
+			var existing = transformListToTransform(selected).matrix,
+				t_new = matrixMultiply(existing.inverse(), m, existing);
+			changes.x = parseFloat(changes.x) + t_new.e;
+			changes.y = parseFloat(changes.y) + t_new.f;
+		}
+		else {
+			// we just absorb all matrices into the element and don't do any remapping
+			var chlist = getTransformList(selected);
+			var mt = svgroot.createSVGTransform();
+			mt.setMatrix(matrixMultiply(transformListToTransform(chlist).matrix,m));
+			chlist.clear();
+			chlist.appendItem(mt);
+		}
+	}
+	
+	// now we have a set of changes and an applied reduced transform list
+	// we apply the changes directly to the DOM
+	switch (elName)
 	{
-		case "line":
-			var pt1 = remap(changes["x1"],changes["y1"]),
-				pt2 = remap(changes["x2"],changes["y2"]);
-			changes["x1"] = pt1.x;
-			changes["y1"] = pt1.y;
-			changes["x2"] = pt2.x;
-			changes["y2"] = pt2.y;
-			break;
-		case "circle":
-			var c = remap(changes["cx"],changes["cy"]);
-			changes["cx"] = c.x;
-			changes["cy"] = c.y;
-			// take the minimum of the new selected box's dimensions for the new circle radius
-			var tbox = transformBox(box.x, box.y, box.width, box.height, m);
-			var w = tbox.tr.x - tbox.tl.x, h = tbox.bl.y - tbox.tl.y;
-			changes["r"] = Math.min(w/2, h/2);
-			break;
-		case "ellipse":
-			var c = remap(changes["cx"],changes["cy"]);
-			changes["cx"] = c.x;
-			changes["cy"] = c.y;
-			changes["rx"] = scalew(changes["rx"]);
-			changes["ry"] = scaleh(changes["ry"]);
-			break;
 		case "foreignObject":
 		case "rect":
 		case "image":
-			var pt1 = remap(changes["x"],changes["y"]);
-			changes["x"] = pt1.x;
-			changes["y"] = pt1.y;
-			changes["width"] = scalew(changes["width"]);
-			changes["height"] = scaleh(changes["height"]);
-			break;
-		case "use":
-// 			var pt1 = remap(changes["x"],changes["y"]);
-// 			changes["x"] = pt1.x;
-// 			changes["y"] = pt1.y;
-// 			break;
-		case "g":
-		case "text":
-			// if it was a translate, then just update x,y
-			if (m.a == 1 && m.b == 0 && m.c == 0 && m.d == 1 && 
-				(m.e != 0 || m.f != 0) ) 
-			{
-				// [T][M] = [M][T']
-				// therefore [T'] = [M_inv][T][M]
-				var existing = transformListToTransform(selected).matrix,
-					t_new = matrixMultiply(existing.inverse(), m, existing);
-				changes["x"] = parseFloat(changes["x"]) + t_new.e;
-				changes["y"] = parseFloat(changes["y"]) + t_new.f;
-			}
-			else {
-				// we just absorb all matrices into the element and don't do any remapping
+			
+			// Allow images to be inverted (give them matrix when flipped)
+			if(elName === 'image' && (m.a < 0 || m.d < 0)) {
+				// Convert to matrix
 				var chlist = getTransformList(selected);
 				var mt = svgroot.createSVGTransform();
 				mt.setMatrix(matrixMultiply(transformListToTransform(chlist).matrix,m));
 				chlist.clear();
 				chlist.appendItem(mt);
+			} else {
+				var pt1 = remap(changes.x,changes.y);
+				
+				changes.width = scalew(changes.width);
+				changes.height = scaleh(changes.height);
+				
+				changes.x = pt1.x + Math.min(0,changes.width);
+				changes.y = pt1.y + Math.min(0,changes.height);
+				changes.width = Math.abs(changes.width);
+				changes.height = Math.abs(changes.height);
+			}
+			finishUp();
+			break;
+		case "ellipse":
+			var c = remap(changes.cx,changes.cy);
+			changes.cx = c.x;
+			changes.cy = c.y;
+			changes.rx = scalew(changes.rx);
+			changes.ry = scaleh(changes.ry);
+		
+			changes.rx = Math.abs(changes.rx);
+			changes.ry = Math.abs(changes.ry);
+			finishUp();
+			break;
+		case "circle":
+			var c = remap(changes.cx,changes.cy);
+			changes.cx = c.x;
+			changes.cy = c.y;
+			// take the minimum of the new selected box's dimensions for the new circle radius
+			var tbox = transformBox(box.x, box.y, box.width, box.height, m);
+			var w = tbox.tr.x - tbox.tl.x, h = tbox.bl.y - tbox.tl.y;
+			changes.r = Math.min(w/2, h/2);
+
+			if(changes.r) changes.r = Math.abs(changes.r);
+			finishUp();
+			break;
+		case "line":
+			var pt1 = remap(changes.x1,changes.y1),
+				pt2 = remap(changes.x2,changes.y2);
+			changes.x1 = pt1.x;
+			changes.y1 = pt1.y;
+			changes.x2 = pt2.x;
+			changes.y2 = pt2.y;
+			
+		case "text":
+		case "use":
+			finishUp();
+			break;
+		case "g":
+			var gsvg = $(selected).data('gsvg');
+			if(gsvg) {
+				assignAttributes(gsvg, changes, 1000, true);
 			}
 			break;
-		case "polygon":
 		case "polyline":
-			var len = changes["points"].length;
+		case "polygon":
+			var len = changes.points.length;
 			for (var i = 0; i < len; ++i) {
-				var pt = changes["points"][i];
+				var pt = changes.points[i];
 				pt = remap(pt.x,pt.y);
-				changes["points"][i].x = pt.x;
-				changes["points"][i].y = pt.y;
+				changes.points[i].x = pt.x;
+				changes.points[i].y = pt.y;
 			}
+
+			var len = changes.points.length;
+			var pstr = "";
+			for (var i = 0; i < len; ++i) {
+				var pt = changes.points[i];
+				pstr += pt.x + "," + pt.y + " ";
+			}
+			selected.setAttribute("points", pstr);
 			break;
 		case "path":
 			var segList = selected.pathSegList;
@@ -2950,13 +3203,13 @@ var remapElement = this.remapElement = function(selected,changes,m) {
 				};
 			}
 			
-			var len = changes["d"].length,
-				firstseg = changes["d"][0],
+			var len = changes.d.length,
+				firstseg = changes.d[0],
 				currentpt = remap(firstseg.x,firstseg.y);
-			changes["d"][0].x = currentpt.x;
-			changes["d"][0].y = currentpt.y;
+			changes.d[0].x = currentpt.x;
+			changes.d[0].y = currentpt.y;
 			for (var i = 1; i < len; ++i) {
-				var seg = changes["d"][i];
+				var seg = changes.d[i];
 				var type = seg.type;
 				// if absolute or first segment, we want to remap x, y, x1, y1, x2, y2
 				// if relative, we want to scalew, scaleh
@@ -2989,54 +3242,11 @@ var remapElement = this.remapElement = function(selected,changes,m) {
 				if (seg.x) currentpt.x = seg.x;
 				if (seg.y) currentpt.y = seg.y;
 			} // for each segment
-			break;
-	} // switch on element type to get initial values
-	
-	// now we have a set of changes and an applied reduced transform list
-	// we apply the changes directly to the DOM
-	// TODO: merge this switch with the above one and optimize
-	switch (selected.tagName)
-	{
-		case "foreignObject":
-		case "rect":
-		case "image":
-			changes.x = changes.x-0 + Math.min(0,changes.width);
-			changes.y = changes.y-0 + Math.min(0,changes.height);
-			changes.width = Math.abs(changes.width);
-			changes.height = Math.abs(changes.height);
-			assignAttributes(selected, changes, 1000, true);
-			break;
-		case "ellipse":
-			changes.rx = Math.abs(changes.rx);
-			changes.ry = Math.abs(changes.ry);
-		case "circle":
-			if(changes.r) changes.r = Math.abs(changes.r);
-		case "line":
-		case "text":
-		case "use":
-			assignAttributes(selected, changes, 1000, true);
-			break;
-		case "g":
-			var gsvg = $(selected).data('gsvg');
-			if(gsvg) {
-				assignAttributes(gsvg, changes, 1000, true);
-			}
-			break;
-		case "polyline":
-		case "polygon":
-			var len = changes["points"].length;
-			var pstr = "";
-			for (var i = 0; i < len; ++i) {
-				var pt = changes["points"][i];
-				pstr += pt.x + "," + pt.y + " ";
-			}
-			selected.setAttribute("points", pstr);
-			break;
-		case "path":
+		
 			var dstr = "";
-			var len = changes["d"].length;
+			var len = changes.d.length;
 			for (var i = 0; i < len; ++i) {
-				var seg = changes["d"][i];
+				var seg = changes.d[i];
 				var type = seg.type;
 				dstr += pathMap[type];
 				switch(type) {
@@ -3079,7 +3289,6 @@ var remapElement = this.remapElement = function(selected,changes,m) {
 			selected.setAttribute("d", dstr);
 			break;
 	}
-	
 };
 
 // Function: updateClipPath
@@ -3090,8 +3299,7 @@ var remapElement = this.remapElement = function(selected,changes,m) {
 // tx - The translation's x value
 // ty - The translation's y value
 var updateClipPath = function(attr, tx, ty) {
-	var id = getUrlFromAttr(attr).substr(1);
-	var path = getElem(id).firstChild;
+	var path = getRefElem(attr).firstChild;
 	
 	var cp_xform = getTransformList(path);
 	
@@ -3122,24 +3330,24 @@ var recalculateDimensions = this.recalculateDimensions = function(selected) {
 		var k = tlist.numberOfItems;
 		while (k--) {
 			var xform = tlist.getItem(k);
-			if (xform.type == 0) {
+			if (xform.type === 0) {
 				tlist.removeItem(k);
 			}
 			// remove identity matrices
-			else if (xform.type == 1) {
+			else if (xform.type === 1) {
 				if (isIdentity(xform.matrix)) {
 					tlist.removeItem(k);
 				}
 			}
 			// remove zero-degree rotations
-			else if (xform.type == 4) {
-				if (xform.angle == 0) {
+			else if (xform.type === 4) {
+				if (xform.angle === 0) {
 					tlist.removeItem(k);
 				}
 			}
 		}
 		// End here if all it has is a rotation
-		if(tlist.numberOfItems == 1 && getRotationAngle(selected)) return null;
+		if(tlist.numberOfItems === 1 && getRotationAngle(selected)) return null;
 	}
 	
 	// if this element had no transforms, we are done
@@ -3147,6 +3355,43 @@ var recalculateDimensions = this.recalculateDimensions = function(selected) {
 		selected.removeAttribute("transform");
 		return null;
 	}
+
+	// TODO: Make this work for more than 2
+	if (tlist) {
+		var k = tlist.numberOfItems;
+		var mxs = [];
+		while (k--) {
+			var xform = tlist.getItem(k);
+			if (xform.type === 1) {
+				mxs.push([xform.matrix, k]);
+			} else if(mxs.length) {
+				mxs = [];
+			}
+		}
+		if(mxs.length === 2) {
+			var m_new = svgroot.createSVGTransformFromMatrix(matrixMultiply(mxs[1][0], mxs[0][0]));
+			tlist.removeItem(mxs[0][1]);
+			tlist.removeItem(mxs[1][1]);
+			tlist.insertItemBefore(m_new, mxs[1][1]);
+		}
+		
+		// combine matrix + translate
+		k = tlist.numberOfItems;
+		
+		if(k === 2 && tlist.getItem(0).type === 1 && tlist.getItem(1).type === 2) {
+			var mt = svgroot.createSVGTransform();
+// 			logMatrix(tlist.getItem(0).matrix);
+// 			logMatrix(transformListToTransform(tlist).matrix);
+			
+			mt.setMatrix(transformListToTransform(tlist).matrix);
+			tlist.clear();
+			tlist.appendItem(mt);
+		}
+	}
+	
+	
+	
+	
 	
 	// Grouped SVG element 
 	var gsvg = $(selected).data('gsvg');
@@ -3343,8 +3588,8 @@ var recalculateDimensions = this.recalculateDimensions = function(selected) {
 						childxforms.push(translateBack);
 						childxforms.push(scale);
 						childxforms.push(translateOrigin);
-						logMatrix(translateBack.matrix);
-						logMatrix(scale.matrix);
+// 						logMatrix(translateBack.matrix);
+// 						logMatrix(scale.matrix);
 					} // not rotated
 					batchCmd.addSubCommand( recalculateDimensions(child) );
 					// TODO: If any <use> have this group as a parent and are 
@@ -3355,7 +3600,7 @@ var recalculateDimensions = this.recalculateDimensions = function(selected) {
 //						var u = uses.length;
 //						while (u--) {
 //							var useElem = uses.item(u);
-//							if(href == useElem.getAttributeNS(xlinkns, "href")) {
+//							if(href == getHref(useElem)) {
 //								var usexlate = svgroot.createSVGTransform();
 //								usexlate.setTranslate(-tx,-ty);
 //								getTransformList(useElem).insertItemBefore(usexlate,0);
@@ -3409,7 +3654,7 @@ var recalculateDimensions = this.recalculateDimensions = function(selected) {
 						if(child.getAttribute('clip-path')) {
 							// tx, ty
 							var attr = child.getAttribute('clip-path');
-							if($.inArray(attr, clipPaths_done) === -1) {
+							if(clipPaths_done.indexOf(attr) === -1) {
 								updateClipPath(attr, tx, ty);
 								clipPaths_done.push(attr);
 							}							
@@ -3423,7 +3668,11 @@ var recalculateDimensions = this.recalculateDimensions = function(selected) {
 						if (childTlist) {
 							var newxlate = svgroot.createSVGTransform();
 							newxlate.setTranslate(tx,ty);
-							childTlist.insertItemBefore(newxlate, 0);
+							if(childTlist.numberOfItems) {
+								childTlist.insertItemBefore(newxlate, 0);
+							} else {
+								childTlist.appendItem(newxlate);
+							}
 							batchCmd.addSubCommand( recalculateDimensions(child) );
 							// If any <use> have this group as a parent and are 
 							// referencing this child, then impose a reverse translate on it
@@ -3433,7 +3682,7 @@ var recalculateDimensions = this.recalculateDimensions = function(selected) {
 							var u = uses.length;
 							while (u--) {
 								var useElem = uses.item(u);
-								if(href == useElem.getAttributeNS(xlinkns, "href")) {
+								if(href == getHref(useElem)) {
 									var usexlate = svgroot.createSVGTransform();
 									usexlate.setTranslate(-tx,-ty);
 									getTransformList(useElem).insertItemBefore(usexlate,0);
@@ -3474,6 +3723,15 @@ var recalculateDimensions = this.recalculateDimensions = function(selected) {
 					
 					batchCmd.addSubCommand( recalculateDimensions(child) );
 					start_transform = old_start_transform;
+					
+					// Convert stroke
+					// TODO: Find out if this should actually happen somewhere else
+					var sw = child.getAttribute("stroke-width");
+					if (child.getAttribute("stroke") !== "none" && !isNaN(sw)) {
+						var avg = (Math.abs(em.a) + Math.abs(em.d)) / 2;
+						child.setAttribute('stroke-width', sw * avg);
+					}
+
 				}
 			}
 			tlist.clear();
@@ -3483,7 +3741,11 @@ var recalculateDimensions = this.recalculateDimensions = function(selected) {
 			if (gangle) {
 				var newRot = svgroot.createSVGTransform();
 				newRot.setRotate(gangle,newcenter.x,newcenter.y);
-				tlist.insertItemBefore(newRot, 0);
+				if(tlist.numberOfItems) {
+					tlist.insertItemBefore(newRot, 0);
+				} else {
+					tlist.appendItem(newRot);
+				}
 			}
 			if (tlist.numberOfItems == 0) {
 				selected.removeAttribute("transform");
@@ -3501,7 +3763,11 @@ var recalculateDimensions = this.recalculateDimensions = function(selected) {
 			
 				var newRot = svgroot.createSVGTransform();
 				newRot.setRotate(gangle,newcenter.x,newcenter.y);
-				tlist.insertItemBefore(newRot, 0);
+				if(tlist.numberOfItems) {
+					tlist.insertItemBefore(newRot, 0);
+				} else {
+					tlist.appendItem(newRot);
+				}
 			}
 		}
 		// if it was a resize
@@ -3532,7 +3798,12 @@ var recalculateDimensions = this.recalculateDimensions = function(selected) {
 						var childTlist = getTransformList(child);
 						var newxlate = svgroot.createSVGTransform();
 						newxlate.setTranslate(tx,ty);
-						childTlist.insertItemBefore(newxlate, 0);
+						if(childTlist.numberOfItems) {
+							childTlist.insertItemBefore(newxlate, 0);
+						} else {
+							childTlist.appendItem(newxlate);
+						}
+
 						batchCmd.addSubCommand( recalculateDimensions(child) );
 						start_transform = old_start_transform;
 					}
@@ -3540,7 +3811,11 @@ var recalculateDimensions = this.recalculateDimensions = function(selected) {
 			}
 			
 			if (gangle) {
-				tlist.insertItemBefore(rnew, 0);
+				if(tlist.numberOfItems) {
+					tlist.insertItemBefore(rnew, 0);
+				} else {
+					tlist.appendItem(rnew);
+				}
 			}
 		}
 	}
@@ -3590,23 +3865,24 @@ var recalculateDimensions = this.recalculateDimensions = function(selected) {
 		var operation = 0;
 		var N = tlist.numberOfItems;
 		
-		
 		// Check if it has a gradient with userSpaceOnUse, in which case
 		// adjust it by recalculating the matrix transform.
 		// TODO: Make this work in Webkit using SVGEditTransformList
 		if(!isWebkit) {
 			var fill = selected.getAttribute('fill');
 			if(fill && fill.indexOf('url(') === 0) {
-				var grad = getElem(getUrlFromAttr(fill).substr(1));
-				if(grad.getAttribute('gradientUnits') === 'userSpaceOnUse') {
+				var paint = getRefElem(fill);
+				var type = 'pattern';
+				if(paint.tagName !== type) type = 'gradient';
+				var attrVal = paint.getAttribute(type + 'Units');
+				if(attrVal === 'userSpaceOnUse') {
 					//Update the userSpaceOnUse element
-					var grad = $(grad);
 					m = transformListToTransform(tlist).matrix;
-					var gtlist = getTransformList(grad[0]);
+					var gtlist = getTransformList(paint);
 					var gmatrix = transformListToTransform(gtlist).matrix;
 					m = matrixMultiply(m, gmatrix);
 					var m_str = "matrix(" + [m.a,m.b,m.c,m.d,m.e,m.f].join(",") + ")";
-					grad.attr('gradientTransform', m_str);
+					paint.setAttribute(type + 'Transform', m_str);
 				}
 			}
 		}
@@ -3688,7 +3964,11 @@ var recalculateDimensions = this.recalculateDimensions = function(selected) {
 			if (angle) {
 				var newRot = svgroot.createSVGTransform();
 				newRot.setRotate(angle,newcenter.x,newcenter.y);
-				tlist.insertItemBefore(newRot, 0);
+				if(tlist.numberOfItems) {
+					tlist.insertItemBefore(newRot, 0);
+				} else {
+					tlist.appendItem(newRot);
+				}
 			}
 			if (tlist.numberOfItems == 0) {
 				selected.removeAttribute("transform");
@@ -3704,13 +3984,19 @@ var recalculateDimensions = this.recalculateDimensions = function(selected) {
 		// if it was a translate, put back the rotate at the new center
 		if (operation == 2) {
 			if (angle) {
-				newcenter = {
-					x: oldcenter.x + m.e,
-					y: oldcenter.y + m.f
-				};
+				if(!hasMatrixTransform(tlist)) {
+					newcenter = {
+						x: oldcenter.x + m.e,
+						y: oldcenter.y + m.f
+					};
+				}
 				var newRot = svgroot.createSVGTransform();
 				newRot.setRotate(angle, newcenter.x, newcenter.y);
-				tlist.insertItemBefore(newRot, 0);
+				if(tlist.numberOfItems) {
+					tlist.insertItemBefore(newRot, 0);
+				} else {
+					tlist.appendItem(newRot);
+				}
 			}
 		}
 		// [Rold][M][T][S][-T] became [Rold][M]
@@ -3730,7 +4016,11 @@ var recalculateDimensions = this.recalculateDimensions = function(selected) {
 		
 			remapElement(selected,changes,extrat);
 			if (angle) {
-				tlist.insertItemBefore(rnew,0);
+				if(tlist.numberOfItems) {
+					tlist.insertItemBefore(rnew, 0);
+				} else {
+					tlist.appendItem(rnew);
+				}
 			}
 		}
 	} // a non-group
@@ -3773,9 +4063,6 @@ var isIdentity = function(m) {
 	return (m.a == 1 && m.b == 0 && m.c == 0 && m.d == 1 && m.e == 0 && m.f == 0);
 }
 
-// matrixMultiply() is provided because WebKit didn't implement multiply() correctly
-// on the SVGMatrix interface.  See https://bugs.webkit.org/show_bug.cgi?id=16062
-
 // Function: matrixMultiply
 // This function tries to return a SVGMatrix that is the multiplication m1*m2.
 // We also round to zero when it's near zero
@@ -3787,21 +4074,11 @@ var isIdentity = function(m) {
 // The matrix object resulting from the calculation
 var matrixMultiply = this.matrixMultiply = function() {
 	var NEAR_ZERO = 1e-14,
-		multi2 = function(m1, m2) {
-			var m = svgroot.createSVGMatrix();
-			m.a = m1.a*m2.a + m1.c*m2.b;
-			m.b = m1.b*m2.a + m1.d*m2.b,
-			m.c = m1.a*m2.c + m1.c*m2.d,
-			m.d = m1.b*m2.c + m1.d*m2.d,
-			m.e = m1.a*m2.e + m1.c*m2.f + m1.e,
-			m.f = m1.b*m2.e + m1.d*m2.f + m1.f;
-			return m;
-		},
 		args = arguments, i = args.length, m = args[i-1];
 	
 	while(i-- > 1) {
 		var m1 = args[i-1];
-		m = multi2(m1, m);
+		m = m1.multiply(m);
 	}
 	if (Math.abs(m.a) < NEAR_ZERO) m.a = 0;
 	if (Math.abs(m.b) < NEAR_ZERO) m.b = 0;
@@ -3952,6 +4229,7 @@ var clearSelection = this.clearSelection = function(noCall) {
 
 // TODO: do we need to worry about selectedBBoxes here?
 
+
 // Function: addToSelection
 // Adds a list of elements to the selection.  The 'selected' handler is then called.
 //
@@ -4017,6 +4295,16 @@ var addToSelection = this.addToSelection = function(elemsToAdd, showGrips) {
 	while(selectedElements[0] == null) selectedElements.shift(0);
 };
 
+// Function: selectOnly()
+// Selects only the given elements, shortcut for clearSelection(); addToSelection()
+//
+// Parameters:
+// elems - an array of DOM elements to be selected
+var selectOnly = this.selectOnly = function(elems, showGrips) {
+	clearSelection(true);
+	addToSelection(elems, showGrips);
+}
+
 // TODO: could use slice here to make this faster?
 // TODO: should the 'selected' handler
 
@@ -4030,8 +4318,7 @@ var removeFromSelection = this.removeFromSelection = function(elemsToRemove) {
 	if (elemsToRemove.length == 0) { return; }
 
 	// find every element and remove it from our array copy
-	var newSelectedItems = new Array(selectedElements.length),
-		newSelectedBBoxes = new Array(selectedBBoxes.length),
+	var newSelectedItems = new Array(selectedElements.length);
 		j = 0,
 		len = selectedElements.length;
 	for (var i = 0; i < len; ++i) {
@@ -4040,7 +4327,6 @@ var removeFromSelection = this.removeFromSelection = function(elemsToRemove) {
 			// keep the item
 			if (elemsToRemove.indexOf(elem) == -1) {
 				newSelectedItems[j] = elem;
-				if (j==0) newSelectedBBoxes[j] = selectedBBoxes[i];
 				j++;
 			}
 			else { // remove the item and its selector
@@ -4050,18 +4336,14 @@ var removeFromSelection = this.removeFromSelection = function(elemsToRemove) {
 	}
 	// the copy becomes the master now
 	selectedElements = newSelectedItems;
-	selectedBBoxes = newSelectedBBoxes;
 };
 
 // Function: selectAllInCurrentLayer
 // Clears the selection, then adds all elements in the current layer to the selection.
-// This function then fires the selected event.
 this.selectAllInCurrentLayer = function() {
 	if (current_layer) {
-		clearSelection();
-		addToSelection($(current_layer).children());
 		current_mode = "select";
-		call("selected", selectedElements);			
+		selectOnly($(current_group || current_layer).children());
 	}
 };
 
@@ -4132,22 +4414,22 @@ var getMouseTarget = this.getMouseTarget = function(evt) {
 	var mouse_target = evt.target;
 	
 	// if it was a <use>, Opera and WebKit return the SVGElementInstance
-	if (mouse_target.correspondingUseElement)
+	if (mouse_target.correspondingUseElement) mouse_target = mouse_target.correspondingUseElement;
 	
-	mouse_target = mouse_target.correspondingUseElement;
 	// for foreign content, go up until we find the foreignObject
 	// WebKit browsers set the mouse target to the svgcanvas div 
-	if ($.inArray(mouse_target.namespaceURI, [mathns, htmlns]) != -1 && 
+	if ([mathns, htmlns].indexOf(mouse_target.namespaceURI) >= 0 && 
 		mouse_target.id != "svgcanvas") 
 	{
 		while (mouse_target.nodeName != "foreignObject") {
 			mouse_target = mouse_target.parentNode;
+			if(!mouse_target) return svgroot;
 		}
 	}
 	
 	// Get the desired mouse_target with jQuery selector-fu
 	// If it's root-like, select the root
-	if($.inArray(mouse_target, [svgroot, container, svgcontent, current_layer]) !== -1) {
+	if([svgroot, container, svgcontent, current_layer].indexOf(mouse_target) >= 0) {
 		return svgroot;
 	}
 	
@@ -4160,10 +4442,9 @@ var getMouseTarget = this.getMouseTarget = function(evt) {
 		return selectorManager.selectorParentGroup;
 	}
 
-	while (mouse_target.parentNode !== current_layer) {
+	while (mouse_target.parentNode !== (current_group || current_layer)) {
 		mouse_target = mouse_target.parentNode;
 	}
-	
 	return mouse_target;
 	
 	
@@ -4183,10 +4464,13 @@ var getMouseTarget = this.getMouseTarget = function(evt) {
 
 // Mouse events
 (function() {
+	var off_x, off_y;
 	
 	var d_attr = null,
 		start_x = null,
 		start_y = null,
+		r_start_x = null,
+		r_start_y = null,
 		init_bbox = {},
 		freehand = {
 			minx: null,
@@ -4201,15 +4485,32 @@ var getMouseTarget = this.getMouseTarget = function(evt) {
 	//   and do nothing else
 	var mouseDown = function(evt)
 	{
-		if(evt.button === 1 || canvas.spaceKey) return;
+		if(canvas.spaceKey) return;
+		
+		var right_click = evt.button === 2;
+		
 		root_sctm = svgcontent.getScreenCTM().inverse();
 		var pt = transformPoint( evt.pageX, evt.pageY, root_sctm ),
 			mouse_x = pt.x * current_zoom,
 			mouse_y = pt.y * current_zoom;
+			
+		if($.browser.msie) {
+			var off = $(container.parentNode).offset();
+			off_x = svgcontent.getAttribute('x')-0 + off.left - container.parentNode.scrollLeft;
+			off_y = svgcontent.getAttribute('y')-0 + off.top - container.parentNode.scrollTop;
+			mouse_x = -(off_x - evt.pageX);
+			mouse_y = -(off_y - evt.pageY);
+		}
+			
 		evt.preventDefault();
+
+		if(right_click) {
+			current_mode = "select";
+			lastClickPoint = pt;
+		}
 		
 		// This would seem to be unnecessary...
-// 		if($.inArray(current_mode, ['select', 'resize']) == -1) {
+// 		if(['select', 'resize'].indexOf(current_mode) == -1) {
 // 			setGradient();
 // 		}
 		
@@ -4217,22 +4518,31 @@ var getMouseTarget = this.getMouseTarget = function(evt) {
 			y = mouse_y / current_zoom,
 			mouse_target = getMouseTarget(evt);
 		
-		start_x = x;
-		start_y = y;
-		
+		// real_x/y ignores grid-snap value
+		var real_x = r_start_x = start_x = x;
+		var real_y = r_start_y = start_y = y;
+
+		if(curConfig.gridSnapping){
+			x = snapToGrid(x);
+			y = snapToGrid(y);
+			start_x = snapToGrid(start_x);
+			start_y = snapToGrid(start_y);
+		}
+
 		// if it is a selector grip, then it must be a single element selected, 
 		// set the mouse_target to that and update the mode to rotate/resize
+		
 		if (mouse_target == selectorManager.selectorParentGroup && selectedElements[0] != null) {
-			var gripid = evt.target.id,
-				griptype = gripid.substr(0,20);
+			var grip = evt.target;
+			var griptype = elData(grip, "type");
 			// rotating
-			if (griptype == "selectorGrip_rotate_") {
+			if (griptype == "rotate") {
 				current_mode = "rotate";
 			}
 			// resizing
-			else if(griptype == "selectorGrip_resize_") {
+			else if(griptype == "resize") {
 				current_mode = "resize";
-				current_resize_mode = gripid.substr(20,gripid.indexOf("_",20)-20);
+				current_resize_mode = elData(grip, "dir");
 			}
 			mouse_target = selectedElements[0];
 		}
@@ -4243,6 +4553,7 @@ var getMouseTarget = this.getMouseTarget = function(evt) {
 			case "select":
 				started = true;
 				current_resize_mode = "none";
+				if(right_click) started = false;
 				
 				if (mouse_target != svgroot) {
 					// if this element is not yet selected, clear selection and select it
@@ -4258,26 +4569,37 @@ var getMouseTarget = this.getMouseTarget = function(evt) {
 						pathActions.clear();
 					}
 					// else if it's a path, go into pathedit mode in mouseup
-
-					// insert a dummy transform so if the element(s) are moved it will have
-					// a transform to use for its translate
-					for (var i = 0; i < selectedElements.length; ++i) {
-						if(selectedElements[i] == null) continue;
-						var slist = getTransformList(selectedElements[i]);
-						slist.insertItemBefore(svgroot.createSVGTransform(), 0);
+					
+					if(!right_click) {
+						// insert a dummy transform so if the element(s) are moved it will have
+						// a transform to use for its translate
+						for (var i = 0; i < selectedElements.length; ++i) {
+							if(selectedElements[i] == null) continue;
+							var slist = getTransformList(selectedElements[i]);
+							if(slist.numberOfItems) {
+								slist.insertItemBefore(svgroot.createSVGTransform(), 0);
+							} else {
+								slist.appendItem(svgroot.createSVGTransform());
+							}
+						}
 					}
 				}
-				else {
+				else if(!right_click){
 					clearSelection();
 					current_mode = "multiselect";
 					if (rubberBox == null) {
 						rubberBox = selectorManager.getRubberBandBox();
 					}
-					start_x *= current_zoom;
-					start_y *= current_zoom;
+					r_start_x *= current_zoom;
+					r_start_y *= current_zoom;
+// 					console.log('p',[evt.pageX, evt.pageY]);					
+// 					console.log('c',[evt.clientX, evt.clientY]);	
+// 					console.log('o',[evt.offsetX, evt.offsetY]);	
+// 					console.log('s',[start_x, start_y]);
+					
 					assignAttributes(rubberBox, {
-						'x': start_x,
-						'y': start_y,
+						'x': r_start_x,
+						'y': r_start_y,
 						'width': 0,
 						'height': 0,
 						'display': 'inline'
@@ -4286,14 +4608,12 @@ var getMouseTarget = this.getMouseTarget = function(evt) {
 				break;
 			case "zoom": 
 				started = true;
-				start_x = x;
-				start_y = y;
 				if (rubberBox == null) {
 					rubberBox = selectorManager.getRubberBandBox();
 				}
 				assignAttributes(rubberBox, {
-						'x': start_x * current_zoom,
-						'y': start_y * current_zoom,
+						'x': real_x * current_zoom,
+						'y': real_x * current_zoom,
 						'width': 0,
 						'height': 0,
 						'display': 'inline'
@@ -4307,9 +4627,11 @@ var getMouseTarget = this.getMouseTarget = function(evt) {
 				// Getting the BBox from the selection box, since we know we
 				// want to orient around it
 				init_bbox = getBBox($('#selectedBox0')[0]);
+				var bb = {};
 				$.each(init_bbox, function(key, val) {
-					init_bbox[key] = val/current_zoom;
+					bb[key] = val/current_zoom;
 				});
+				init_bbox = bb;
 				
 				// append three dummy transforms to the tlist so that
 				// we can translate,scale,translate in mousemove
@@ -4323,15 +4645,21 @@ var getMouseTarget = this.getMouseTarget = function(evt) {
 					tlist.appendItem(svgroot.createSVGTransform());
 					tlist.appendItem(svgroot.createSVGTransform());
 					tlist.appendItem(svgroot.createSVGTransform());
+					
+					if(support.nonScalingStroke) {
+						mouse_target.style.vectorEffect = 'non-scaling-stroke';
+						var all = mouse_target.getElementsByTagName('*'), len = all.length;
+						for(var i = 0; i < all.length; i++) {
+							all[i].style.vectorEffect = 'non-scaling-stroke';
+						}
+					}
 				}
 				break;
 			case "fhellipse":
 			case "fhrect":
 			case "fhpath":
 				started = true;
-				start_x = x;
-				start_y = y;
-				d_attr = x + "," + y + " ";
+				d_attr = real_x + "," + real_y + " ";
 				var stroke_w = cur_shape.stroke_width == 0?1:cur_shape.stroke_width;
 				addSvgElementFromJson({
 					"element": "polyline",
@@ -4345,15 +4673,13 @@ var getMouseTarget = this.getMouseTarget = function(evt) {
 						"style": "pointer-events:none"
 					}
 				});
-				freehand.minx = x;
-				freehand.maxx = x;
-				freehand.miny = y;
-				freehand.maxy = y;
+				freehand.minx = real_x;
+				freehand.maxx = real_x;
+				freehand.miny = real_y;
+				freehand.maxy = real_y;
 				break;
 			case "image":
 				started = true;
-				start_x = x;
-				start_y = y;
 				var newImage = addSvgElementFromJson({
 					"element": "image",
 					"attr": {
@@ -4366,7 +4692,7 @@ var getMouseTarget = this.getMouseTarget = function(evt) {
 						"style": "pointer-events:inherit"
 					}
 				});
-				newImage.setAttributeNS(xlinkns, "xlink:href", last_good_img_url);
+				setHref(newImage, last_good_img_url);
 				preventClickDefault(newImage);
 				break;
 			case "square":
@@ -4456,7 +4782,8 @@ var getMouseTarget = this.getMouseTarget = function(evt) {
 						"font-size": cur_text.font_size,
 						"font-family": cur_text.font_family,
 						"text-anchor": "middle",
-						"xml:space": "preserve"
+						"xml:space": "preserve",
+						"opacity": cur_shape.opacity
 					}
 				});
 // 					newText.textContent = "text";
@@ -4514,9 +4841,21 @@ var getMouseTarget = this.getMouseTarget = function(evt) {
 			mouse_y = pt.y * current_zoom,
 			shape = getElem(getId());
 	
-		x = mouse_x / current_zoom;
-		y = mouse_y / current_zoom;
-	
+		// IE9 gives the wrong root_sctm
+		// TODO: Use non-browser sniffing way to make this work
+		if($.browser.msie) {
+			mouse_x = -(off_x - evt.pageX);
+			mouse_y = -(off_y - evt.pageY);
+		}
+
+		var real_x = x = mouse_x / current_zoom;
+		var real_y = y = mouse_y / current_zoom;
+
+		if(curConfig.gridSnapping){
+			x = snapToGrid(x);
+			y = snapToGrid(y);
+		}
+
 		evt.preventDefault();
 		
 		switch (current_mode)
@@ -4529,6 +4868,11 @@ var getMouseTarget = this.getMouseTarget = function(evt) {
 					var dx = x - start_x;
 					var dy = y - start_y;
 					
+					if(curConfig.gridSnapping){
+						dx = snapToGrid(dx);
+						dy = snapToGrid(dy);
+					}
+
 					if(evt.shiftKey) { var xya = Utils.snapToAngle(start_x,start_y,x,y); x=xya.x; y=xya.y; }
 
 					if (dx != 0 || dy != 0) {
@@ -4564,13 +4908,13 @@ var getMouseTarget = this.getMouseTarget = function(evt) {
 				}
 				break;
 			case "multiselect":
-				x *= current_zoom;
-				y *= current_zoom;
+				real_x *= current_zoom;
+				real_y *= current_zoom;
 				assignAttributes(rubberBox, {
-					'x': Math.min(start_x,x),
-					'y': Math.min(start_y,y),
-					'width': Math.abs(x-start_x),
-					'height': Math.abs(y-start_y)
+					'x': Math.min(r_start_x, real_x),
+					'y': Math.min(r_start_y, real_y),
+					'width': Math.abs(real_x - r_start_x),
+					'height': Math.abs(real_y - r_start_y)
 				},100);
 
 				// for each selected:
@@ -4598,6 +4942,7 @@ var getMouseTarget = this.getMouseTarget = function(evt) {
 				
 				if (elemsToAdd.length > 0) 
 					addToSelection(elemsToAdd);
+					
 				break;
 			case "resize":
 				// we track the resize bounding box and translate/scale the selected element
@@ -4608,7 +4953,14 @@ var getMouseTarget = this.getMouseTarget = function(evt) {
 					box=hasMatrix?init_bbox:getBBox(selected), 
 					left=box.x, top=box.y, width=box.width,
 					height=box.height, dx=(x-start_x), dy=(y-start_y);
-								
+				
+				if(curConfig.gridSnapping){
+					dx = snapToGrid(dx);
+					dy = snapToGrid(dy);
+					height = snapToGrid(height);
+					width = snapToGrid(width);
+				}
+
 				// if rotated, adjust the dx,dy values
 				var angle = getRotationAngle(selected);
 				if (angle) {
@@ -4632,13 +4984,13 @@ var getMouseTarget = this.getMouseTarget = function(evt) {
 					sy = height ? (height+dy)/height : 1, 
 					sx = width ? (width+dx)/width : 1;
 				// if we are dragging on the north side, then adjust the scale factor and ty
-				if(current_resize_mode.indexOf("n") != -1) {
+				if(current_resize_mode.indexOf("n") >= 0) {
 					sy = height ? (height-dy)/height : 1;
 					ty = height;
 				}
 				
 				// if we dragging on the east side, then adjust the scale factor and tx
-				if(current_resize_mode.indexOf("w") != -1) {
+				if(current_resize_mode.indexOf("w") >= 0) {
 					sx = width ? (width-dx)/width : 1;
 					tx = width;
 				}
@@ -4647,6 +4999,14 @@ var getMouseTarget = this.getMouseTarget = function(evt) {
 				var translateOrigin = svgroot.createSVGTransform(),
 					scale = svgroot.createSVGTransform(),
 					translateBack = svgroot.createSVGTransform();
+
+				if(curConfig.gridSnapping){
+					left = snapToGrid(left);
+					tx = snapToGrid(tx);
+					top = snapToGrid(top);
+					ty = snapToGrid(ty);
+				}
+
 				translateOrigin.setTranslate(-(left+tx),-(top+ty));
 				if(evt.shiftKey) {
 					if(sx == 1) sx = sy
@@ -4666,31 +5026,17 @@ var getMouseTarget = this.getMouseTarget = function(evt) {
 					tlist.replaceItem(scale, N-2);
 					tlist.replaceItem(translateOrigin, N-1);
 				}
-				var selectedBBox = selectedBBoxes[0];				
-				
-				if(selectedBBox) {
-					// reset selected bbox top-left position
-					selectedBBox.x = left;
-					selectedBBox.y = top;
-					
-					// if this is a translate, adjust the box position
-					if (tx) {
-						selectedBBox.x += dx;
-					}
-					if (ty) {
-						selectedBBox.y += dy;
-					}
-				}
+
 				selectorManager.requestSelector(selected).resize();
 				break;
 			case "zoom":
-				x *= current_zoom;
-				y *= current_zoom;
+				real_x *= current_zoom;
+				real_y *= current_zoom;
 				assignAttributes(rubberBox, {
-					'x': Math.min(start_x*current_zoom,x),
-					'y': Math.min(start_y*current_zoom,y),
-					'width': Math.abs(x-start_x*current_zoom),
-					'height': Math.abs(y-start_y*current_zoom)
+					'x': Math.min(r_start_x*current_zoom, real_x),
+					'y': Math.min(r_start_y*current_zoom, real_y),
+					'width': Math.abs(real_x - r_start_x*current_zoom),
+					'height': Math.abs(real_y - r_start_y*current_zoom)
 				},100);			
 				break;
 			case "text":
@@ -4703,6 +5049,11 @@ var getMouseTarget = this.getMouseTarget = function(evt) {
 				// Opera has a problem with suspendRedraw() apparently
 				var handle = null;
 				if (!window.opera) svgroot.suspendRedraw(1000);
+
+				if(curConfig.gridSnapping){
+					x = snapToGrid(x);
+					y = snapToGrid(y);
+				}
 
 				var x2 = x;
 				var y2 = y;					
@@ -4733,6 +5084,13 @@ var getMouseTarget = this.getMouseTarget = function(evt) {
 					new_y = Math.min(start_y,y);
 				}
 	
+				if(curConfig.gridSnapping){
+					w = snapToGrid(w);
+					h = snapToGrid(h);
+					new_x = snapToGrid(new_x);
+					new_y = snapToGrid(new_y);
+				}
+
 				assignAttributes(shape,{
 					'width': w,
 					'height': h,
@@ -4745,6 +5103,9 @@ var getMouseTarget = this.getMouseTarget = function(evt) {
 				var c = $(shape).attr(["cx", "cy"]);
 				var cx = c.cx, cy = c.cy,
 					rad = Math.sqrt( (x-cx)*(x-cx) + (y-cy)*(y-cy) );
+				if(curConfig.gridSnapping){
+					rad = snapToGrid(rad);
+				}
 				shape.setAttributeNS(null, "r", rad);
 				break;
 			case "ellipse":
@@ -4753,6 +5114,12 @@ var getMouseTarget = this.getMouseTarget = function(evt) {
 				// Opera has a problem with suspendRedraw() apparently
 					handle = null;
 				if (!window.opera) svgroot.suspendRedraw(1000);
+				if(curConfig.gridSnapping){
+					x = snapToGrid(x);
+					cx = snapToGrid(cx);
+					y = snapToGrid(y);
+					cy = snapToGrid(cy);
+				}
 				shape.setAttributeNS(null, "rx", Math.abs(x - cx) );
 				var ry = Math.abs(evt.shiftKey?(x - cx):(y - cy));
 				shape.setAttributeNS(null, "ry", ry );
@@ -4760,15 +5127,13 @@ var getMouseTarget = this.getMouseTarget = function(evt) {
 				break;
 			case "fhellipse":
 			case "fhrect":
-				freehand.minx = Math.min(x, freehand.minx);
-				freehand.maxx = Math.max(x, freehand.maxx);
-				freehand.miny = Math.min(y, freehand.miny);
-				freehand.maxy = Math.max(y, freehand.maxy);
+				freehand.minx = Math.min(real_x, freehand.minx);
+				freehand.maxx = Math.max(real_x, freehand.maxx);
+				freehand.miny = Math.min(real_y, freehand.miny);
+				freehand.maxy = Math.max(real_y, freehand.maxy);
 			// break; missing on purpose
 			case "fhpath":
-				start_x = x;
-				start_y = y;
-				d_attr += + x + "," + y + " ";
+				d_attr += + real_x + "," + real_y + " ";
 				shape.setAttributeNS(null, "points", d_attr);
 				break;
 			// update path stretch line coordinates
@@ -4778,6 +5143,12 @@ var getMouseTarget = this.getMouseTarget = function(evt) {
 				x *= current_zoom;
 				y *= current_zoom;
 				
+				if(curConfig.gridSnapping){
+					x = snapToGrid(x);
+					y = snapToGrid(y);
+					start_x = snapToGrid(start_x);
+					start_y = snapToGrid(start_y);
+				}
 				if(evt.shiftKey) {
 					var x1 = path.dragging?path.dragging[0]:start_x;
 					var y1 = path.dragging?path.dragging[1]:start_y;
@@ -4787,10 +5158,10 @@ var getMouseTarget = this.getMouseTarget = function(evt) {
 				
 				if(rubberBox && rubberBox.getAttribute('display') != 'none') {
 					assignAttributes(rubberBox, {
-						'x': Math.min(start_x,x),
-						'y': Math.min(start_y,y),
-						'width': Math.abs(x-start_x),
-						'height': Math.abs(y-start_y)
+						'x': Math.min(r_start_x, real_x),
+						'y': Math.min(r_start_y, real_y),
+						'width': Math.abs(real_x - r_start_x),
+						'height': Math.abs(real_y - r_start_y)
 					},100);
 				}
 				
@@ -4821,7 +5192,9 @@ var getMouseTarget = this.getMouseTarget = function(evt) {
 				cx = center.x;
 				cy = center.y;
 				var angle = ((Math.atan2(cy-y,cx-x)  * (180/Math.PI))-90) % 360;
-				
+				if(curConfig.gridSnapping){
+					angle = snapToGrid(angle);
+				}
 				if(evt.shiftKey) { // restrict rotations to nice angles (WRS)
 					var snap = 45;
 					angle= Math.round(angle/snap)*snap;
@@ -4850,7 +5223,7 @@ var getMouseTarget = this.getMouseTarget = function(evt) {
 	//   this is done in when we recalculate the selected dimensions()
 	var mouseUp = function(evt)
 	{
-		if(evt.button === 1) return;
+		if(evt.button === 2) return;
 		var tempJustSelected = justSelected;
 		justSelected = null;
 		if (!started) return;
@@ -4861,7 +5234,12 @@ var getMouseTarget = this.getMouseTarget = function(evt) {
 			y = mouse_y / current_zoom,
 			element = getElem(getId()),
 			keep = false;
-				
+
+		var real_x = x;
+		var real_y = y;
+		
+		var useUnit = (curConfig.baseUnit !== 'px');
+		
 		started = false;
 		switch (current_mode)
 		{
@@ -4901,7 +5279,7 @@ var getMouseTarget = this.getMouseTarget = function(evt) {
 					// always recalculate dimensions to strip off stray identity transforms
 					recalculateAllSelectedDimensions();
 					// if it was being dragged/resized
-					if (x != start_x || y != start_y) {
+					if (real_x != r_start_x || real_y != r_start_y) {
 						var len = selectedElements.length;
 						for	(var i = 0; i < len; ++i) {
 							if (selectedElements[i] == null) break;
@@ -4917,9 +5295,6 @@ var getMouseTarget = this.getMouseTarget = function(evt) {
 						if (selectedElements[0].nodeName == "path" && selectedElements[1] == null) {
 							pathActions.select(t);
 						} // if it was a path
-						else if (selectedElements[0].nodeName == "text" && selectedElements[1] == null) {
-							textActions.select(t, x, y);
-						} // if it was a path
 						// else, if it was selected and this is a shift-click, remove it from selection
 						else if (evt.shiftKey) {
 							if(tempJustSelected != t) {
@@ -4927,6 +5302,16 @@ var getMouseTarget = this.getMouseTarget = function(evt) {
 							}
 						}
 					} // no change in mouse position
+					
+					// Remove non-scaling stroke
+					if(support.nonScalingStroke) {
+						var elem = selectedElements[0];
+						elem.removeAttribute('style');
+						walkTree(elem, function(elem) {
+							elem.removeAttribute('style');
+						});
+					}
+
 				}
 				// we return immediately from select so that the obj_num is not incremented
 				return;
@@ -4937,10 +5322,10 @@ var getMouseTarget = this.getMouseTarget = function(evt) {
 				}
 				var factor = evt.shiftKey?.5:2;
 				call("zoomed", {
-					'x': Math.min(start_x,x),
-					'y': Math.min(start_y,y),
-					'width': Math.abs(x-start_x),
-					'height': Math.abs(y-start_y),
+					'x': Math.min(r_start_x, real_x),
+					'y': Math.min(r_start_y, real_y),
+					'width': Math.abs(real_x - r_start_x),
+					'height': Math.abs(real_y - r_start_y),
 					'factor': factor
 				});
 				return;
@@ -5017,7 +5402,7 @@ var getMouseTarget = this.getMouseTarget = function(evt) {
 				break;
 			case "text":
 				keep = true;
-				addToSelection([element]);
+				selectOnly([element]);
 				textActions.start(element);
 				break;
 			case "path":
@@ -5050,6 +5435,7 @@ var getMouseTarget = this.getMouseTarget = function(evt) {
 				}
 				// perform recalculation to weed out any stray identity transforms that might get stuck
 				recalculateAllSelectedDimensions();
+				call("changed", selectedElements);
 				break;
 			default:
 				// This could occur in an extension
@@ -5090,12 +5476,15 @@ var getMouseTarget = this.getMouseTarget = function(evt) {
 				t.id != "svgcanvas" && t.id != "svgroot") 
 			{
 				// switch into "select" mode if we've clicked on an element
-				addToSelection([t], true);
 				canvas.setMode("select");
+				selectOnly([t], true);
 			}
 			
 		} else if (element != null) {
 			canvas.addedNew = true;
+			
+			if(useUnit) unitConvertAttrs(element);
+			
 			var ani_dur = .2, c_ani;
 			if(opac_ani.beginElement && element.getAttribute('opacity') != cur_shape.opacity) {
 				c_ani = $(opac_ani).clone().attr({
@@ -5119,19 +5508,55 @@ var getMouseTarget = this.getMouseTarget = function(evt) {
 				cleanupElement(element);
 				if(current_mode == "path") {
 					pathActions.toEditMode(element);
-				} else if (current_mode == "text" || current_mode == "image" || current_mode == "foreignObject") {
-					// keep us in the tool we were in unless it was a text or image element
-					addToSelection([element], true);
+				} else {
+					selectOnly([element], true);
 				}
 				// we create the insert command that is stored on the stack
 				// undo means to call cmd.unapply(), redo means to call cmd.apply()
 				addCommandToHistory(new InsertElementCommand(element));
+				
 				call("changed",[element]);
 			}, ani_dur * 1000);
 		}
 		
 		start_transform = null;
 	};
+	
+	var dblClick = function(evt) {
+		var evt_target = evt.target;
+		var parent = evt_target.parentNode;
+		
+		// Do nothing if already in current group
+		if(parent === current_group) return;
+		
+		var mouse_target = getMouseTarget(evt);
+		
+		if(mouse_target.tagName === 'text' && current_mode !== 'textedit') {
+			var pt = transformPoint( evt.pageX, evt.pageY, root_sctm );
+			textActions.select(mouse_target, pt.x, pt.y);
+		}
+		
+		if(getRotationAngle(mouse_target)) {
+			// TODO: Allow method of in-group editing without having to do 
+			// this (similar to editing rotated paths)
+		
+			// Ungroup and regroup
+			canvas.ungroupSelectedElement();
+			canvas.groupSelectedElements();
+			mouse_target = selectedElements[0];
+			clearSelection(true);
+		}
+		// Reset context
+		if(current_group) {
+			leaveContext();
+		}
+		
+		if(parent.tagName !== 'g' || parent === current_layer || mouse_target === selectorManager.selectorParentGroup) {
+			// Escape from in-group edit
+			return;
+		}
+		setContext(mouse_target);
+	}
 
 	// prevent links from being followed in the canvas
 	var handleLinkInCanvas = function(e) {
@@ -5139,7 +5564,7 @@ var getMouseTarget = this.getMouseTarget = function(evt) {
 		return false;
 	};
 	
-	$(container).mousedown(mouseDown).mousemove(mouseMove).click(handleLinkInCanvas);
+	$(container).mousedown(mouseDown).mousemove(mouseMove).click(handleLinkInCanvas).dblclick(dblClick);
 	$(window).mouseup(mouseUp);
 	
 	$(container).bind("mousewheel DOMMouseScroll", function(e){
@@ -5189,7 +5614,7 @@ var preventClickDefault = function(img) {
 // Group: Text edit functions
 // Functions relating to editing text elements
 var textActions = canvas.textActions = function() {
-	var curtext, current_text;
+	var curtext;
 	var textinput;
 	var cursor;
 	var selblock;
@@ -5308,7 +5733,6 @@ var textActions = canvas.textActions = function() {
 
 		// No content, so return 0
 		if(chardata.length == 1) return 0;
-		
 		// Determine if cursor should be on left or right of character
 		var charpos = curtext.getCharNumAtPosition(pt);
 		if(charpos < 0) {
@@ -5389,7 +5813,7 @@ var textActions = canvas.textActions = function() {
 	}
 
 	function selectWord(evt) {
-		if(!allow_dbl) return;
+		if(!allow_dbl || !curtext) return;
 	
 		var ept = transformPoint( evt.pageX, evt.pageY, root_sctm ),
 			mouse_x = ept.x * current_zoom,
@@ -5413,13 +5837,8 @@ var textActions = canvas.textActions = function() {
 
 	return {
 		select: function(target, x, y) {
-			if (current_text == target) {
-				curtext = target;
-				textActions.toEditMode(x, y);
-			} // going into pathedit mode
-			else {
-				current_text = target;
-			}	
+			curtext = target;
+			textActions.toEditMode(x, y);
 		},
 		start: function(elem) {
 			curtext = elem;
@@ -5463,6 +5882,7 @@ var textActions = canvas.textActions = function() {
 			var sel = selectorManager.requestSelector(curtext).selectorRect;
 			
 			textActions.init();
+
 			$(curtext).css('cursor', 'text');
 			
 // 				if(support.editableText) {
@@ -5514,7 +5934,6 @@ var textActions = canvas.textActions = function() {
 // 			$(textinput).blur(hideCursor);
 		},
 		clear: function() {
-			current_text = null;
 			if(current_mode == "textedit") {
 				textActions.toSelectMode();
 			}
@@ -5572,7 +5991,6 @@ var textActions = canvas.textActions = function() {
 				x: end.x,
 				width: 0
 			});
-			
 			setSelection(textinput.selectionStart, textinput.selectionEnd, true);
 		}
 	}
@@ -6197,7 +6615,7 @@ var pathActions = this.pathActions = function() {
 				var index = indexes[i];
 				var seg = p.segs[index];
 				if(seg.ptgrip) {
-					if($.inArray(index, p.selected_pts) == -1 && index >= 0) {
+					if(p.selected_pts.indexOf(index) == -1 && index >= 0) {
 						p.selected_pts.push(index);
 					}
 				}
@@ -6221,7 +6639,7 @@ var pathActions = this.pathActions = function() {
 		}
 
 		this.removePtFromSelection = function(index) {
-			var pos = $.inArray(index, p.selected_pts);
+			var pos = p.selected_pts.indexOf(index);
 			if(pos == -1) {
 				return;
 			} 
@@ -6666,6 +7084,14 @@ var pathActions = this.pathActions = function() {
 				var x = mouse_x/current_zoom,
 					y = mouse_y/current_zoom,
 					stretchy = getElem("path_stretch_line");
+				
+				if(curConfig.gridSnapping){
+					x = snapToGrid(x);
+					y = snapToGrid(y);
+					mouse_x = snapToGrid(mouse_x);
+					mouse_y = snapToGrid(mouse_y);
+				}
+
 				if (!stretchy) {
 					stretchy = document.createElementNS(svgns, "line");
 					assignAttributes(stretchy, {
@@ -6789,7 +7215,10 @@ var pathActions = this.pathActions = function() {
 						d_attr += "L" + round(x) + "," + round(y) + " ";
 
 						newpath.setAttribute("d", d_attr);
-
+						
+						x *= current_zoom;
+						y *= current_zoom;
+						
 						// set stretchy line to latest point
 						assignAttributes(stretchy, {
 							'x1': x,
@@ -7261,7 +7690,7 @@ var pathActions = this.pathActions = function() {
 				var addToD = function(pnts, more, last) {
 					var str = '';
 					var more = more?' '+more.join(' '):'';
-					var last = last?shortFloat(last):'';
+					var last = last?' '+shortFloat(last):'';
 					$.each(pnts, function(i, pnt) {
 						pnts[i] = shortFloat(pnt);
 					});
@@ -7423,20 +7852,21 @@ var removeUnusedDefElems = this.removeUnusedDefElems = function() {
 		}
 		
 		// gradients can refer to other gradients
-		var href = el.getAttributeNS(xlinkns, "href");
-		if (href && href.indexOf('#') == 0) {
+		var href = getHref(el);
+		if (href && href.indexOf('#') === 0) {
 			defelem_uses.push(href.substr(1));
 		}
 	};
 	
-	var defelems = $(svgcontent).find("linearGradient, radialGradient, filter, marker");
+	var defelems = $(svgcontent).find("linearGradient, radialGradient, filter, marker, svg, symbol");
 		defelem_ids = [],
 		i = defelems.length;
 	while (i--) {
 		var defelem = defelems[i];
 		var id = defelem.id;
-		if($.inArray(id, defelem_uses) == -1) {
-			// Not found, so remove
+		if(defelem_uses.indexOf(id) < 0) {
+			// Not found, so remove (but remember)
+			removedElements[id] = defelem;
 			defelem.parentNode.removeChild(defelem);
 			numRemoved++;
 		}
@@ -7467,10 +7897,16 @@ var svgCanvasToString = this.svgCanvasToString = function() {
 	
 	// Keep SVG-Edit comment on top
 	$.each(svgcontent.childNodes, function(i, node) {
-		if(i && node.nodeType == 8 && node.data.indexOf('Created with') != -1) {
+		if(i && node.nodeType == 8 && node.data.indexOf('Created with') >= 0) {
 			svgcontent.insertBefore(node, svgcontent.firstChild);
 		}
 	});
+	
+	// Move out of in-group editing mode
+	if(current_group) {
+		leaveContext();
+		selectOnly([current_group]);
+	}
 	
 	var naked_svgs = [];
 	
@@ -7514,6 +7950,9 @@ var svgCanvasToString = this.svgCanvasToString = function() {
 // String with the given element as an SVG tag
 var svgToString = this.svgToString = function(elem, indent) {
 	var out = new Array(), toXml = Utils.toXml;
+	
+	var unit = curConfig.baseUnit
+	var unit_re = new RegExp('^-?[\\d\\.]+' + unit + '$');
 
 	if (elem) {
 		cleanupElement(elem);
@@ -7524,7 +7963,7 @@ var svgToString = this.svgToString = function(elem, indent) {
 		
 		for (var i=0; i<indent; i++) out.push(" ");
 		out.push("<"); out.push(elem.nodeName);			
-		if(elem.id == 'svgcontent') {
+		if(elem.id === 'svgcontent') {
 			// Process root element separately
 			var res = getResolution();
 			out.push(' width="' + res.w + '" height="' + res.h + '" xmlns="'+svgns+'"');
@@ -7544,6 +7983,7 @@ var svgToString = this.svgToString = function(elem, indent) {
 			});
 			
 			var i = attrs.length;
+			var attr_names = ['width','height','xmlns','x','y','viewBox','id','overflow'];
 			while (i--) {
 				attr = attrs.item(i);
 				var attrVal = toXml(attr.nodeValue);
@@ -7552,8 +7992,7 @@ var svgToString = this.svgToString = function(elem, indent) {
 				if(attr.nodeName.indexOf('xmlns:') === 0) continue;
 
 				// only serialize attributes we don't use internally
-				if (attrVal != "" && 
-					$.inArray(attr.localName, ['width','height','xmlns','x','y','viewBox','id','overflow']) == -1) 
+				if (attrVal != "" && attr_names.indexOf(attr.localName) == -1) 
 				{
 
 					if(!attr.namespaceURI || nsMap[attr.namespaceURI]) {
@@ -7564,26 +8003,29 @@ var svgToString = this.svgToString = function(elem, indent) {
 				}
 			}
 		} else {
+			var moz_attrs = ['-moz-math-font-style', '_moz-math-font-style'];
 			for (var i=attrs.length-1; i>=0; i--) {
 				attr = attrs.item(i);
 				var attrVal = toXml(attr.nodeValue);
 				//remove bogus attributes added by Gecko
-				if ($.inArray(attr.localName, ['-moz-math-font-style', '_moz-math-font-style']) !== -1) continue;
+				if (moz_attrs.indexOf(attr.localName) >= 0) continue;
 				if (attrVal != "") {
-					if(attrVal.indexOf('pointer-events') == 0) continue;
-					if(attr.localName == "class" && attrVal.indexOf('se_') == 0) continue;
+					if(attrVal.indexOf('pointer-events') === 0) continue;
+					if(attr.localName === "class" && attrVal.indexOf('se_') === 0) continue;
 					out.push(" "); 
-					if(attr.localName == 'd') attrVal = pathActions.convertPath(elem, true);
+					if(attr.localName === 'd') attrVal = pathActions.convertPath(elem, true);
 					if(!isNaN(attrVal)) {
 						attrVal = shortFloat(attrVal);
+					} else if(unit_re.test(attrVal)) {
+						attrVal = shortFloat(attrVal) + unit;
 					}
 					
 					// Embed images when saving 
 					if(save_options.apply
-						&& elem.nodeName == 'image' 
-						&& attr.localName == 'href'
+						&& elem.nodeName === 'image' 
+						&& attr.localName === 'href'
 						&& save_options.images
-						&& save_options.images == 'embed') 
+						&& save_options.images === 'embed') 
 					{
 						var img = encodableImages[attrVal];
 						if(img) attrVal = img;
@@ -7713,7 +8155,6 @@ this.rasterExport = function() {
 	// Selector and notice
 	var issue_list = {
 		'feGaussianBlur': uiStrings.exportNoBlur,
-		'image': uiStrings.exportNoImage,
 		'foreignObject': uiStrings.exportNoforeignObject,
 		'[stroke-dasharray]': uiStrings.exportNoDashArray
 	};
@@ -7775,6 +8216,8 @@ this.randomizeIds = function() {
 // g - The parent element of the tree to give unique IDs
 var uniquifyElems = this.uniquifyElems = function(g) {
 	var ids = {};
+	var ref_elems = ["filter", "linearGradient", "pattern",	"radialGradient", "textPath", "use"];
+	
 	walkTree(g, function(n) {
 		// if it's an element node
 		if (n.nodeType == 1) {
@@ -7790,7 +8233,7 @@ var uniquifyElems = this.uniquifyElems = function(g) {
 			
 			// now search for all attributes on this element that might refer
 			// to other elements
-			$.each(["clip-path", "fill", "filter", "marker-end", "marker-mid", "marker-start", "mask", "stroke"],function(i,attr) {
+			$.each(ref_attrs,function(i,attr) {
 				var attrnode = n.getAttributeNode(attr);
 				if (attrnode) {
 					// the incoming file has been sanitized, so we should be able to safely just strip off the leading #
@@ -7807,11 +8250,9 @@ var uniquifyElems = this.uniquifyElems = function(g) {
 			});
 			
 			// check xlink:href now
-			var href = n.getAttributeNS(xlinkns,"href");
+			var href = getHref(n);
 			// TODO: what if an <image> or <a> element refers to an element internally?
-			if(href && 
-				$.inArray(n.nodeName, ["filter", "linearGradient", "pattern", 
-							 "radialGradient", "textPath", "use"]) != -1)
+			if(href && ref_elems.indexOf(n.nodeName) >= 0)
 			{
 				var refid = href.substr(1);
 				if (!(refid in ids)) {
@@ -7847,7 +8288,7 @@ var uniquifyElems = this.uniquifyElems = function(g) {
 			var k = hreffers.length;
 			while (k--) {
 				var hreffer = hreffers[k];
-				hreffer.setAttributeNS(xlinkns, "xlink:href", "#"+newid);
+				setHref(hreffer, "#"+newid);
 			}
 		}
 	}
@@ -7855,6 +8296,82 @@ var uniquifyElems = this.uniquifyElems = function(g) {
 	// manually increment obj_num because our cloned elements are not in the DOM yet
 	obj_num++;
 }
+
+// Function convertGradients
+// Converts gradients from userSpaceOnUse to objectBoundingBox
+var convertGradients = this.convertGradients = function(elem) {
+	var elems = $(elem).find('linearGradient, radialGradient');
+	if(!elems.length && isWebkit) {
+		// Bug in webkit prevents regular *Gradient selector search
+		elems = $(elem).find('*').filter(function() {
+			return (this.tagName.indexOf('Gradient') >= 0);
+		});
+	}
+	
+	elems.each(function() {
+		var grad = this;
+		if($(grad).attr('gradientUnits') === 'userSpaceOnUse') {
+			// TODO: Support more than one element with this ref by duplicating parent grad
+			var elems = $(svgcontent).find('[fill=url(#' + grad.id + ')],[stroke=url(#' + grad.id + ')]');
+			if(!elems.length) return;
+			
+			// get object's bounding box
+			var bb = getBBox(elems[0]);
+			
+			// This will occur if the element is inside a <defs> or a <symbol>,
+			// in which we shouldn't need to convert anyway.
+			if(!bb) return;
+			
+			if(grad.tagName === 'linearGradient') {
+				var g_coords = $(grad).attr(['x1', 'y1', 'x2', 'y2']);
+				
+				// If has transform, convert
+				var tlist = grad.gradientTransform.baseVal;
+				if(tlist && tlist.numberOfItems > 0) {
+					var m = transformListToTransform(tlist).matrix;
+					var pt1 = transformPoint(g_coords.x1, g_coords.y1, m);
+					var pt2 = transformPoint(g_coords.x2, g_coords.y2, m);
+					
+					g_coords.x1 = pt1.x;
+					g_coords.y1 = pt1.y;
+					g_coords.x2 = pt2.x;
+					g_coords.y2 = pt2.y;
+					grad.removeAttribute('gradientTransform');
+				}
+				
+				$(grad).attr({
+					x1: (g_coords.x1 - bb.x) / bb.width,
+					y1: (g_coords.y1 - bb.y) / bb.height,
+					x2: (g_coords.x2 - bb.x) / bb.width,
+					y2: (g_coords.y2 - bb.y) / bb.height
+				});
+				grad.removeAttribute('gradientUnits');
+			} else {
+				// Note: radialGradient elements cannot be easily converted 
+				// because userSpaceOnUse will keep circular gradients, while
+				// objectBoundingBox will x/y scale the gradient according to
+				// its bbox. 
+				
+				// For now we'll do nothing, though we should probably have
+				// the gradient be updated as the element is moved, as 
+				// inkscape/illustrator do.
+			
+//         				var g_coords = $(grad).attr(['cx', 'cy', 'r']);
+//         				
+// 						$(grad).attr({
+// 							cx: (g_coords.cx - bb.x) / bb.width,
+// 							cy: (g_coords.cy - bb.y) / bb.height,
+// 							r: g_coords.r
+// 						});
+// 						
+// 	        			grad.removeAttribute('gradientUnits');
+			}
+			
+
+		}
+	});
+}
+
 
 // Function: convertToGroup
 // Converts selected/given <use> or child SVG element to a group
@@ -7887,9 +8404,14 @@ var convertToGroup = this.convertToGroup = function(elem) {
 		
 		ts = $elem.attr('transform');
 		var pos = $elem.attr(['x','y']);
-		
+
+// 		if(ts.length) {
+// 
+// 			ts += " ";
+// 		}
+
 		// Not ideal, but works
-		ts += "translate(" + pos.x + "," + pos.y + ")";
+		ts += "translate(" + (pos.x || 0) + "," + (pos.x || 0) + ")";
 		
 		var prev = $elem.prev();
 		
@@ -7929,14 +8451,25 @@ var convertToGroup = this.convertToGroup = function(elem) {
 			}
 			batchCmd.addSubCommand(new InsertElementCommand(g));
 		}
-	
+		
+		convertGradients(g);
+		
 		// recalculate dimensions on the top-level children so that unnecessary transforms
 		// are removed
 		walkTreePost(g, function(n){try{recalculateDimensions(n)}catch(e){console.log(e)}});
 		
-		clearSelection();
-		addToSelection([g]);
+		// Give ID for any visible element missing one
+		$(g).find(visElems).each(function() {
+			if(!this.id) this.id = getNextId();
+		});
 		
+		selectOnly([g]);
+		
+		// Temporary hack to get rid of matrix
+		// TODO: See what ungroupSelectedElement does to absorb matrix
+		canvas.ungroupSelectedElement();
+		canvas.groupSelectedElements();
+// 		
 		addCommandToHistory(batchCmd);
 		
 	} else {
@@ -7968,6 +8501,9 @@ this.setSvgString = function(xmlString) {
 	
 		// set new svg document
 		svgcontent = svgroot.appendChild(svgdoc.importNode(newDoc.documentElement, true));
+		
+		var content = $(svgcontent);
+		
 		// retrieve or set the nonce
 		n = svgcontent.getAttributeNS(se_ns, 'nonce');
 		if (n) {
@@ -7980,10 +8516,10 @@ this.setSvgString = function(xmlString) {
 			if (extensions["Arrows"])  call("setarrownonce", nonce) ;
 		}         
 		// change image href vals if possible
-		$(svgcontent).find('image').each(function() {
+		content.find('image').each(function() {
 			var image = this;
 			preventClickDefault(image);
-			var val = this.getAttributeNS(xlinkns, "href");
+			var val = getHref(this);
 			if(val.indexOf('data:') === 0) {
 				// Check if an SVG-edit data URI
 				var m = val.match(/svgedit_url=(.*?);/);
@@ -7999,7 +8535,7 @@ this.setSvgString = function(xmlString) {
 		});
 	
 		// Wrap child SVGs in group elements
-		$(svgcontent).find('svg').each(function() {
+		content.find('svg').each(function() {
 			// Skip if it's in a <defs>
 			if($(this).closest('defs').length) return;
 		
@@ -8015,9 +8551,17 @@ this.setSvgString = function(xmlString) {
 			}
 		});
 		
+		// For Firefox: Put all paint elems in defs
+		if(isGecko) {
+			content.find('linearGradient, radialGradient, pattern').appendTo(findDefs());
+		}
+
+		
 		// Set ref element for <use> elements
-		$(svgcontent).find('use').each(function() {
-			var id = this.getAttributeNS(xlinkns,"href").substr(1);
+		
+		// TODO: This should also be done if the object is re-added through "redo"
+		content.find('use').each(function() {
+			var id = getHref(this).substr(1);
 			var ref_elem = getElem(id);
 			$(this).data('ref', ref_elem);
 			if(ref_elem.tagName == 'symbol' || ref_elem.tagName == 'svg') {
@@ -8025,58 +8569,11 @@ this.setSvgString = function(xmlString) {
 			}
 		});
 		
-		// convert gradients with userSpaceOnUse to objectBoundingBox
-		$(svgcontent).find('linearGradient, radialGradient').each(function() {
-			var grad = this;
-			if($(grad).attr('gradientUnits') === 'userSpaceOnUse') {
-				// TODO: Support more than one element with this ref by duplicating parent grad
-				var elems = $(svgcontent).find('[fill=url(#' + grad.id + ')],[stroke=url(#' + grad.id + ')]');
-				if(!elems.length) return;
-				
-				// get object's bounding box
-				var bb = elems[0].getBBox();
-				
-				if(grad.tagName === 'linearGradient') {
-					var g_coords = $(grad).attr(['x1', 'y1', 'x2', 'y2']);
-					
-					$(grad).attr({
-						x1: (g_coords.x1 - bb.x) / bb.width,
-						y1: (g_coords.y1 - bb.y) / bb.height,
-						x2: (g_coords.x2 - bb.x) / bb.width,
-						y2: (g_coords.y1 - bb.y) / bb.height
-					});
-					
-					grad.removeAttribute('gradientUnits');
-				} else {
-					// Note: radialGradient elements cannot be easily converted 
-					// because userSpaceOnUse will keep circular gradients, while
-					// objectBoundingBox will x/y scale the gradient according to
-					// its bbox. 
-					
-					// For now we'll do nothing, though we should probably have
-					// the gradient be updated as the element is moved, as 
-					// inkscape/illustrator do.
-				
-//         				var g_coords = $(grad).attr(['cx', 'cy', 'r']);
-//         				
-// 						$(grad).attr({
-// 							cx: (g_coords.cx - bb.x) / bb.width,
-// 							cy: (g_coords.cy - bb.y) / bb.height,
-// 							r: g_coords.r
-// 						});
-// 						
-// 	        			grad.removeAttribute('gradientUnits');
-				}
-				
-
-			}
-		});
+		convertGradients(content[0]);
 		
 		// recalculate dimensions on the top-level children so that unnecessary transforms
 		// are removed
 		walkTreePost(svgcontent, function(n){try{recalculateDimensions(n)}catch(e){console.log(e)}});
-		
-		var content = $(svgcontent);
 		
 		var attrs = {
 			id: 'svgcontent',
@@ -8108,12 +8605,25 @@ this.setSvgString = function(xmlString) {
 			});
 		}
 		
+		// identify layers
+		identifyLayers();
+		
+		// Give ID for any visible layer children missing one
+		content.children().find(visElems).each(function() {
+			if(!this.id) this.id = getNextId();
+		});
+		
 		// Percentage width/height, so let's base it on visible elements
 		if(percs) {
 			var bb = getStrokedBBox();
-			attrs.width = bb.width;
-			attrs.height = bb.height;
+			attrs.width = bb.width + bb.x;
+			attrs.height = bb.height + bb.y;
 		}
+		
+		// Just in case negative numbers are given or 
+		// result from the percs calculation
+		if(attrs.width <= 0) attrs.width = 100;
+		if(attrs.height <= 0) attrs.height = 100;
 		
 		content.attr(attrs);
 		this.contentW = attrs['width'];
@@ -8126,9 +8636,6 @@ this.setSvgString = function(xmlString) {
 		
 		// reset zoom
 		current_zoom = 1;
-		
-		// identify layers
-		identifyLayers();
 		
 		// reset transform lists
 		svgTransformLists = {};
@@ -8173,7 +8680,9 @@ this.importSvgString = function(xmlString) {
 
 		// import new svg document into our document
 		var svg = svgdoc.importNode(newDoc.documentElement, true);
-	
+		
+		uniquifyElems(svg);
+		
 		var innerw = convertToNum('width', svg.getAttribute("width")),
 			innerh = convertToNum('height', svg.getAttribute("height")),
 			innervb = svg.getAttribute("viewBox"),
@@ -8197,25 +8706,33 @@ this.importSvgString = function(xmlString) {
 		// Hack to make recalculateDimensions understand how to scale
 		ts = "translate(0) " + ts + " translate(0)";
 		
-		// Uncomment this once Firefox has fixed their symbol bug:
-		// https://bugzilla.mozilla.org/show_bug.cgi?id=353575
-// 		var symbol = svgdoc.createElementNS(svgns, "symbol");
-// 		while (svg.firstChild) {
-// 			symbol.appendChild(svg.firstChild);
-// 		}
-// 		var attrs = svg.attributes;
-// 		for(var i=0; i < attrs.length; i++) {
-// 			var attr = attrs[i];
-// 			symbol.setAttribute(attr.nodeName, attr.nodeValue);
-// 		}
-		var symbol = svg;
+		var symbol = svgdoc.createElementNS(svgns, "symbol");
+		var defs = findDefs();
+		
+		if(isGecko) {
+			// Move all gradients into root for Firefox, workaround for this bug:
+			// https://bugzilla.mozilla.org/show_bug.cgi?id=353575
+			$(svg).find('linearGradient, radialGradient, pattern').appendTo(defs);
+		}
+
+		while (svg.firstChild) {
+			var first = svg.firstChild;
+			symbol.appendChild(first);
+		}
+		var attrs = svg.attributes;
+		for(var i=0; i < attrs.length; i++) {
+			var attr = attrs[i];
+			symbol.setAttribute(attr.nodeName, attr.nodeValue);
+		}
+// 		var symbol = svg;
 		symbol.id = getNextId();
 		
 		var use_el = svgdoc.createElementNS(svgns, "use");
-		use_el.id = getNextId();
-		use_el.setAttributeNS(xlinkns, "xlink:href", "#" + symbol.id);
+		setHref(use_el, "#" + symbol.id);
 		findDefs().appendChild(symbol);
-		current_layer.appendChild(use_el);
+		
+		(current_group || current_layer).appendChild(use_el);
+		use_el.id = getNextId();
 		clearSelection();
 		
 		use_el.setAttribute("transform", ts);
@@ -8247,6 +8764,7 @@ this.importSvgString = function(xmlString) {
 // Updates layer system
 var identifyLayers = function() {
 	all_layers = [];
+	leaveContext();
 	var numchildren = svgcontent.childNodes.length;
 	// loop through all children of svgcontent
 	var orphans = [], layernames = [];
@@ -8285,7 +8803,7 @@ var identifyLayers = function() {
 	// create a new layer and add all the orphans to it
 	if (orphans.length > 0) {
 		var i = 1;
-		while ($.inArray(("Layer " + i), layernames) != -1) { i++; }
+		while (layernames.indexOf(("Layer " + i)) >= 0) { i++; }
 		var newname = "Layer " + i;
 		current_layer = svgdoc.createElementNS(svgns, "g");
 		var layer_title = svgdoc.createElementNS(svgns, "title");
@@ -8323,6 +8841,36 @@ this.createLayer = function(name) {
 	call("changed", [new_layer]);
 };
 
+// Function: cloneLayer
+// Creates a new top-level layer in the drawing with the given name, copies all the current layer's contents
+// to it, and then clears the selection  This function then calls the 'changed' handler.
+// This is an undoable action.
+//
+// Parameters:
+// name - The given name
+this.cloneLayer = function(name) {
+	var batchCmd = new BatchCommand("Duplicate Layer");
+	var new_layer = svgdoc.createElementNS(svgns, "g");
+	var layer_title = svgdoc.createElementNS(svgns, "title");
+	layer_title.textContent = name;
+	new_layer.appendChild(layer_title);
+	$(current_layer).after(new_layer);
+	var childs = current_layer.childNodes;
+	for(var i = 0; i < childs.length; i++) {
+		var ch = childs[i];
+		if(ch.localName == 'title') continue;
+		new_layer.appendChild(copyElem(ch));
+	}
+	
+	clearSelection();
+	identifyLayers();
+
+	batchCmd.addSubCommand(new InsertElementCommand(new_layer));
+	addCommandToHistory(batchCmd);
+	canvas.setCurrentLayer(name);
+	call("changed", [new_layer]);
+};
+
 // Function: deleteCurrentLayer
 // Deletes the current layer from the drawing and then clears the selection. This function 
 // then calls the 'changed' handler.  This is an undoable action.
@@ -8339,6 +8887,15 @@ this.deleteCurrentLayer = function() {
 		canvas.setCurrentLayer(all_layers[all_layers.length-1][0]);
 		call("changed", [svgcontent]);
 		return true;
+	}
+	return false;
+};
+
+// Function: hasLayer
+// Check if layer with given name already exists
+this.hasLayer = function(name) {
+	for(var i = 0; i < all_layers.length; i++) {
+		if(all_layers[i][0] == name) return true;
 	}
 	return false;
 };
@@ -8594,6 +9151,55 @@ this.moveSelectedToLayer = function(layername) {
 	return true;
 };
 
+this.mergeLayer = function(skipHistory) {
+	var batchCmd = new BatchCommand("Merge Layer");
+	var prev = $(current_layer).prev()[0];
+	if(!prev) return;
+	var childs = current_layer.childNodes;
+	var len = childs.length;
+	batchCmd.addSubCommand(new RemoveElementCommand(current_layer, svgcontent));
+
+	while(current_layer.firstChild) {
+		var ch = current_layer.firstChild;
+		if(ch.localName == 'title') {
+			batchCmd.addSubCommand(new RemoveElementCommand(ch, current_layer));
+			current_layer.removeChild(ch);
+			continue;
+		}
+		var oldNextSibling = ch.nextSibling;
+		prev.appendChild(ch);
+		batchCmd.addSubCommand(new MoveElementCommand(ch, oldNextSibling, current_layer));
+	}
+	
+	// Remove current layer
+	svgcontent.removeChild(current_layer);
+	
+	if(!skipHistory) {
+		clearSelection();
+		identifyLayers();
+
+		call("changed", [svgcontent]);
+		
+		addCommandToHistory(batchCmd);
+	}
+	
+	current_layer = prev;
+	return batchCmd;
+}
+
+this.mergeAllLayers = function() {
+	var batchCmd = new BatchCommand("Merge all Layers");
+	current_layer = all_layers[all_layers.length-1][1];
+	while($(svgcontent).children('g').length > 1) {
+		batchCmd.addSubCommand(canvas.mergeLayer(true));
+	}
+	
+	clearSelection();
+	identifyLayers();
+	call("changed", [svgcontent]);
+	addCommandToHistory(batchCmd);
+}
+
 // Function: getLayerOpacity
 // Returns the opacity of the given layer.  If the input name is not a layer, null is returned.
 //
@@ -8639,6 +9245,55 @@ this.setLayerOpacity = function(layername, opacity) {
 	}
 };
 
+// Function: leaveContext
+// Return from a group context to the regular kind, make any previously
+// disabled elements enabled again
+var leaveContext = this.leaveContext = function() {
+	var len = disabled_elems.length;
+	if(len) {
+		for(var i = 0; i < len; i++) {
+			var elem = disabled_elems[i];
+			
+			var orig = elData(elem, 'orig_opac');
+			if(orig !== 1) {
+				elem.setAttribute('opacity', orig);
+			} else {
+				elem.removeAttribute('opacity');
+			}
+			elem.setAttribute('style', 'pointer-events: inherit');
+		}
+		disabled_elems = [];
+		clearSelection(true);
+		call("contextset", null);
+	}
+	current_group = null;
+}
+
+// Function: setContext
+// Set the current context (for in-group editing)
+var setContext = this.setContext = function(elem) {
+	leaveContext();
+	if(typeof elem === 'string') {
+		elem = getElem(elem);
+	}
+
+	// Edit inside this group
+	current_group = elem;
+	
+	// Disable other elements
+	$(elem).parentsUntil('#svgcontent').andSelf().siblings().each(function() {
+		var opac = this.getAttribute('opacity') || 1;
+		// Store the original's opacity
+		elData(this, 'orig_opac', opac);
+		this.setAttribute('opacity', opac * .33);
+		this.setAttribute('style', 'pointer-events: none');
+		disabled_elems.push(this);
+	});
+
+	clearSelection();
+	call("contextset", current_group);
+}
+
 // Group: Document functions
 
 // Function: clear
@@ -8663,7 +9318,7 @@ this.clear = function() {
 	canvas.createLayer("Layer 1");
 	
 	// clear the undo stack
-	resetUndoStack();
+	canvas.undoMgr.resetUndoStack();
 	// reset the selector manager
 	selectorManager.initGroup();
 	// reset the rubber band box
@@ -8707,7 +9362,7 @@ this.getZoom = function(){return current_zoom;};
 // Function: getVersion
 // Returns a string which describes the revision number of SvgCanvas.
 this.getVersion = function() {
-	return "svgcanvas.js ($Rev: 1653 $)";
+	return "svgcanvas.js ($Rev: 1804 $)";
 };
 
 // Function: setUiStrings
@@ -8742,6 +9397,19 @@ this.getTitle = function(elem) {
 	}
 	return '';
 }
+
+// Function: getHref
+// Returns the given element's xlink:href value
+var getHref = this.getHref = function(elem) {
+	return elem.getAttributeNS(xlinkns, "href");
+}
+
+// Function: setHref
+// Sets the given element's xlink:href value
+var setHref = this.setHref = function(elem, val) {
+	elem.setAttributeNS(xlinkns, "xlink:href", val);
+}
+
 
 // Function: setGroupTitle
 // Sets the group/SVG's title content
@@ -8979,7 +9647,6 @@ this.getMode = function() {
 this.setMode = function(name) {
 	pathActions.clear(true);
 	textActions.clear();
-	
 	cur_properties = (selectedElements[0] && selectedElements[0].nodeName == 'text') ? cur_text : cur_shape;
 	current_mode = name;
 };
@@ -9216,7 +9883,7 @@ this.getStrokeWidth = function() {
 // Parameters:
 // val - A Float indicating the new stroke width value
 this.setStrokeWidth = function(val) {
-	if(val == 0 && $.inArray(current_mode, ['line', 'path']) != -1) {
+	if(val == 0 && ['line', 'path'].indexOf(current_mode) >= 0) {
 		canvas.setStrokeWidth(1);
 		return;
 	}
@@ -9597,7 +10264,7 @@ this.setImageURL = function(val) {
 	var attrs = $(elem).attr(['width', 'height']);
 	var setsize = (!attrs.width || !attrs.height);
 
-	var cur_href = elem.getAttributeNS(xlinkns, "href");
+	var cur_href = getHref(elem);
 	
 	// Do nothing if no URL change or size change
 	if(cur_href !== val) {
@@ -9606,7 +10273,7 @@ this.setImageURL = function(val) {
 
 	var batchCmd = new BatchCommand("Change Image URL");
 
-	elem.setAttributeNS(xlinkns, "xlink:href", val);
+	setHref(elem, val);
 	batchCmd.addSubCommand(new ChangeElementCommand(elem, {
 		"#href": cur_href
 	}));
@@ -9862,6 +10529,9 @@ var changeSelectedAttributeNoUndo = function(attr, newValue, elems) {
 	}
 	var elems = elems || selectedElements;
 	var i = elems.length;
+	var no_xy_elems = ['g', 'polyline', 'path'];
+	var good_g_attrs = ['transform', 'opacity', 'filter'];
+	
 	while (i--) {
 		var elem = elems[i];
 		if (elem == null) continue;
@@ -9872,19 +10542,19 @@ var changeSelectedAttributeNoUndo = function(attr, newValue, elems) {
 		}
 		
 		// Set x,y vals on elements that don't have them
-		if((attr == 'x' || attr == 'y') && $.inArray(elem.tagName, ['g', 'polyline', 'path']) != -1) {
+		if((attr === 'x' || attr === 'y') && no_xy_elems.indexOf(elem.tagName) >= 0) {
 			var bbox = getStrokedBBox([elem]);
-			var diff_x = attr == 'x' ? newValue - bbox.x : 0;
-			var diff_y = attr == 'y' ? newValue - bbox.y : 0;
+			var diff_x = attr === 'x' ? newValue - bbox.x : 0;
+			var diff_y = attr === 'y' ? newValue - bbox.y : 0;
 			canvas.moveSelectedElements(diff_x*current_zoom, diff_y*current_zoom, true);
 			continue;
 		}
 		
-		// only allow the transform/opacity attribute to change on <g> elements, slightly hacky
-		if (elem.tagName == "g" && $.inArray(attr, ['transform', 'opacity', 'filter']) !== -1);
-		var oldval = attr == "#text" ? elem.textContent : elem.getAttribute(attr);
+		// only allow the transform/opacity/filter attribute to change on <g> elements, slightly hacky
+		if (elem.tagName === "g" && good_g_attrs.indexOf(attr) >= 0);
+		var oldval = attr === "#text" ? elem.textContent : elem.getAttribute(attr);
 		if (oldval == null)  oldval = "";
-		if (oldval != String(newValue)) {
+		if (oldval !== String(newValue)) {
 			if (attr == "#text") {
 				var old_w = getBBox(elem).width;
 				elem.textContent = newValue;
@@ -9907,7 +10577,7 @@ var changeSelectedAttributeNoUndo = function(attr, newValue, elems) {
 // 					}
 				
 			} else if (attr == "#href") {
-				elem.setAttributeNS(xlinkns, "xlink:href", newValue);
+				setHref(elem, newValue);
 			}
 			else elem.setAttribute(attr, newValue);
 			if (i==0)
@@ -9915,7 +10585,7 @@ var changeSelectedAttributeNoUndo = function(attr, newValue, elems) {
 			// Use the Firefox ffClone hack for text elements with gradients or
 			// where other text attributes are changed. 
 			if(elem.nodeName == 'text') {
-				if((newValue+'').indexOf('url') == 0 || $.inArray(attr, ['font-size','font-family','x','y']) != -1 && elem.textContent) {
+				if((newValue+'').indexOf('url') == 0 || ['font-size','font-family','x','y'].indexOf(attr) >= 0 && elem.textContent) {
 					elem = ffClone(elem);
 				}
 			}
@@ -9923,7 +10593,7 @@ var changeSelectedAttributeNoUndo = function(attr, newValue, elems) {
 			// codedread: it is now possible for this function to be called with elements
 			// that are not in the selectedElements array, we need to only request a
 			// selector if the element is in that array
-			if ($.inArray(elem, selectedElements) != -1) {
+			if (selectedElements.indexOf(elem) >= 0) {
 				setTimeout(function() {
 					// Due to element replacement, this element may no longer
 					// be part of the DOM
@@ -10007,6 +10677,86 @@ this.deleteSelectedElements = function() {
 	clearSelection();
 };
 
+// Function: cutSelectedElements
+// Removes all selected elements from the DOM and adds the change to the 
+// history stack. Remembers removed elements on the clipboard
+
+// TODO: Combine similar code with deleteSelectedElements
+this.cutSelectedElements = function() {
+	var batchCmd = new BatchCommand("Cut Elements");
+	var len = selectedElements.length;
+	var selectedCopy = []; //selectedElements is being deleted
+	for (var i = 0; i < len; ++i) {
+		var selected = selectedElements[i];
+		if (selected == null) break;
+
+		var parent = selected.parentNode;
+		var t = selected;
+		// this will unselect the element and remove the selectedOutline
+		selectorManager.releaseSelector(t);
+		var elem = parent.removeChild(t);
+		selectedCopy.push(selected) //for the copy
+		selectedElements[i] = null;
+		batchCmd.addSubCommand(new RemoveElementCommand(elem, parent));
+	}
+	if (!batchCmd.isEmpty()) addCommandToHistory(batchCmd);
+	call("changed", selectedCopy);
+	clearSelection();
+	
+	canvas.clipBoard = selectedCopy;
+};
+
+// Function: copySelectedElements
+// Remembers the current selected elements on the clipboard
+this.copySelectedElements = function() {
+	canvas.clipBoard = $.merge([], selectedElements);
+};
+
+this.pasteElements = function(type) {
+	var cb = canvas.clipBoard;
+	var len = cb.length;
+	if(!len) return;
+	
+	var pasted = [];
+	var batchCmd = new BatchCommand('Paste elements');
+	
+	// Move elements to lastClickPoint
+
+	while (len--) {
+		var elem = cb[len];
+		if(!elem) continue;
+		var copy = copyElem(elem);
+
+		// See if elem with elem ID is in the DOM already
+		if(!getElem(elem.id)) copy.id = elem.id;
+		
+		pasted.push(copy);
+		(current_group || current_layer).appendChild(copy);
+		batchCmd.addSubCommand(new InsertElementCommand(copy));
+	}
+	
+	selectOnly(pasted);
+	
+	if(type !== 'in_place') {
+		var bbox = getStrokedBBox(pasted);
+		var cx = lastClickPoint.x - (bbox.x + bbox.width/2),
+			cy = lastClickPoint.y - (bbox.y + bbox.height/2),
+			dx = [],
+			dy = [];
+	
+		$.each(pasted, function(i, item) {
+			dx.push(cx);
+			dy.push(cy);
+		});
+		
+		var cmd = canvas.moveSelectedElements(dx, dy, false);
+		batchCmd.addSubCommand(cmd);
+	}
+	
+	addCommandToHistory(batchCmd);
+	call("changed", pasted);
+}
+
 // Function: groupSelectedElements
 // Wraps all the selected elements in a group (g) element
 this.groupSelectedElements = function() {
@@ -10034,8 +10784,7 @@ this.groupSelectedElements = function() {
 	if (!batchCmd.isEmpty()) addCommandToHistory(batchCmd);
 	
 	// update selection
-	clearSelection();
-	addToSelection([g], true);
+	selectOnly([g], true);
 };
 
 // Function: ungroupSelectedElement
@@ -10048,6 +10797,12 @@ this.ungroupSelectedElement = function() {
 
 		convertToGroup(g);
 		return;
+	} else if(g.tagName === 'use') {
+		// Somehow doesn't have data set, so retrieve
+		var symbol = getElem(getHref(g).substr(1));
+		$(g).data('symbol', symbol);
+		convertToGroup(g);
+		return;
 	}
 	if (g.tagName == "g") {
 	
@@ -10056,6 +10811,7 @@ this.ungroupSelectedElement = function() {
 		var anchor = g.nextSibling;
 		var children = new Array(g.childNodes.length);
 		var xform = g.getAttribute("transform");
+		
 		// get consolidated matrix
 		var glist = getTransformList(g);
 		var m = transformListToTransform(glist).matrix;
@@ -10109,14 +10865,14 @@ this.ungroupSelectedElement = function() {
 				if(!orig_cblur) {
 					// Set group's filter to use first child's ID
 					if(!gfilter) {
-						gfilter = getElem(getUrlFromAttr(gattrs.filter).substr(1));
+						gfilter = getRefElem(gattrs.filter);
 					} else {
 						// Clone the group's filter
 						gfilter = copyElem(gfilter);
 						findDefs().appendChild(gfilter);
 					}
 				} else {
-					gfilter = getElem(getUrlFromAttr(elem.getAttribute('filter')).substr(1));
+					gfilter = getRefElem(elem.getAttribute('filter'));
 				}
 
 				// Change this in future for different filters
@@ -10132,6 +10888,9 @@ this.ungroupSelectedElement = function() {
 			}
 			
 			var chtlist = getTransformList(elem);
+
+			// Don't process gradient transforms
+			if(~elem.tagName.indexOf('Gradient')) chtlist = null;
 			
 			// Hopefully not a problem to add this. Necessary for elements like <desc/>
 			if(!chtlist) continue;
@@ -10181,13 +10940,21 @@ this.ungroupSelectedElement = function() {
 					}
 					
 					if (sangle) {
-						chtlist.insertItemBefore(r2, 0);
+						if(chtlist.numberOfItems) {
+							chtlist.insertItemBefore(r2, 0);
+						} else {
+							chtlist.appendItem(r2);
+						}
 					}
 
 					if (trm.e || trm.f) {
 						var tr = svgroot.createSVGTransform();
 						tr.setTranslate(trm.e, trm.f);
-						chtlist.insertItemBefore(tr, 0);
+						if(chtlist.numberOfItems) {
+							chtlist.insertItemBefore(tr, 0);
+						} else {
+							chtlist.appendItem(tr);
+						}
 					}
 				}
 				else { // more complicated than just a rotate
@@ -10272,6 +11039,41 @@ this.moveToBottomSelectedElement = function() {
 	}
 };
 
+// Function: moveUpDownSelected
+// Moves the select element up or down the stack, based on the visibly
+// intersecting elements
+//
+// Parameters: 
+// dir - String that's either 'Up' or 'Down'
+this.moveUpDownSelected = function(dir) {
+	var selected = selectedElements[0];
+	if (!selected) return;
+	
+	curBBoxes = [];
+	var closest, found_cur;
+	// jQuery sorts this list
+	var list = $(getIntersectionList(getStrokedBBox([selected]))).toArray();
+	if(dir == 'Down') list.reverse();
+
+	$.each(list, function() {
+		if(!found_cur) {
+			if(this == selected) {
+				found_cur = true;
+			}
+			return;
+		}
+		closest = this;
+		return false;
+	});
+	if(!closest) return;
+	
+	var t = selected;
+	var oldParent = t.parentNode;
+	var oldNextSibling = t.nextSibling;
+	$(closest)[dir == 'Down'?'before':'after'](t);
+	addCommandToHistory(new MoveElementCommand(t, oldNextSibling, oldParent, "Move " + dir));
+}
+
 // Function: moveSelectedElements
 // Moves selected elements on the X/Y axis 
 //
@@ -10282,7 +11084,7 @@ this.moveToBottomSelectedElement = function() {
 //
 // Returns:
 // Batch command for the move
-this.moveSelectedElements = function(dx,dy,undoable) {
+this.moveSelectedElements = function(dx, dy, undoable) {
 	// if undoable is not sent, default to true
 	// if single values, scale them to the zoom
 	if (dx.constructor != Array) {
@@ -10297,6 +11099,10 @@ this.moveSelectedElements = function(dx,dy,undoable) {
 		if (selected != null) {
 			if (i==0)
 				selectedBBoxes[i] = getBBox(selected);
+			
+			var b = {};
+			for(var j in selectedBBoxes[i]) b[j] = selectedBBoxes[i][j];
+			selectedBBoxes[i] = b;
 			
 			var xform = svgroot.createSVGTransform();
 			var tlist = getTransformList(selected);
@@ -10315,13 +11121,18 @@ this.moveSelectedElements = function(dx,dy,undoable) {
 				}
 				xform.setTranslate(dx,dy);
 			}
-			
-			tlist.insertItemBefore(xform, 0);
+
+			if(tlist.numberOfItems) {
+				tlist.insertItemBefore(xform, 0);
+			} else {
+				tlist.appendItem(xform);
+			}
 			
 			var cmd = recalculateDimensions(selected);
 			if (cmd) {
 				batchCmd.addSubCommand(cmd);
 			}
+			
 			selectorManager.requestSelector(selected).resize();
 		}
 	}
@@ -10346,14 +11157,14 @@ this.cloneSelectedElements = function() {
 	}
 	// use slice to quickly get the subset of elements we need
 	var copiedElements = selectedElements.slice(0,i);
-	this.clearSelection();
+	this.clearSelection(true);
 	// note that we loop in the reverse way because of the way elements are added
 	// to the selectedElements array (top-first)
 	var i = copiedElements.length;
 	while (i--) {
 		// clone each element and replace it within copiedElements
 		var elem = copiedElements[i] = copyElem(copiedElements[i]);
-		current_layer.appendChild(elem);
+		(current_group || current_layer).appendChild(elem);
 		batchCmd.addSubCommand(new InsertElementCommand(elem));
 	}
 	
@@ -10361,7 +11172,6 @@ this.cloneSelectedElements = function() {
 		addToSelection(copiedElements.reverse()); // Need to reverse for correct selection-adding
 		this.moveSelectedElements(20,20,false);
 		addCommandToHistory(batchCmd);
-		call("selected", selectedElements);
 	}
 };
 
@@ -10526,7 +11336,7 @@ this.setBackground = function(color, url) {
 				'style':'pointer-events:none'
 			});
 		}
-		bg_img.setAttributeNS(xlinkns, "xlink:href", url);
+		setHref(bg_img, url);
 		bg.appendChild(bg_img);
 	} else if(bg_img) {
 		bg_img.parentNode.removeChild(bg_img);
@@ -10541,7 +11351,8 @@ this.setBackground = function(color, url) {
 this.cycleElement = function(next) {
 	var cur_elem = selectedElements[0];
 	var elem = false;
-	var all_elems = getVisibleElements(current_layer);
+	var all_elems = getVisibleElements(current_group || current_layer);
+	if(!all_elems.length) return;
 	if (cur_elem == null) {
 		var num = next?all_elems.length-1:0;
 		elem = all_elems[num];
@@ -10560,8 +11371,7 @@ this.cycleElement = function(next) {
 			} 
 		}
 	}		
-	clearSelection();
-	addToSelection([elem], true);
+	selectOnly([elem], true);
 	call("selected", selectedElements);
 }
 
@@ -10625,7 +11435,28 @@ this.getPrivateMethods = function() {
 	return obj;
 };
 
-// console.log('canvas.getPrivateMethods',canvas.getPrivateMethods);
+// Temporary fix until MS fixes:
+// https://connect.microsoft.com/IE/feedback/details/599257/
+function disableAdvancedTextEdit() {
+	var curtext;
+	var textInput = $('#text').css({
+		position: 'static'
+	});
+
+	$.each(['mouseDown','mouseUp','mouseMove', 'setCursor', 'init', 'select', 'toEditMode'], function() {
+		textActions[this] = $.noop;
+	});
+	
+	textActions.init = function(elem) {
+		curtext = elem;
+		$(curtext).unbind('dblclick').bind('dblclick', function() {
+			textInput.focus();
+		});
+	}
+	
+	canvas.textActions = textActions;
+	
+}
 
 // Test support for features/bugs
 (function() {
@@ -10648,6 +11479,20 @@ this.getPrivateMethods = function() {
 		support.pathInsertItemBefore = false;
 	}
 	
+	var text = document.createElementNS(svgns,'text');
+	text.textContent = 'a';
+	svgcontent.appendChild(text);
+	
+	// text character positioning
+	try {
+		text.getStartPositionOfChar(0);
+		support.textCharPos = true;
+	} catch(err) {
+		support.textCharPos = false;
+		disableAdvancedTextEdit();
+	}
+	svgcontent.removeChild(text);
+	
 	// TODO: Find better way to check support for this
 	support.editableText = isOpera;
 	
@@ -10665,10 +11510,22 @@ this.getPrivateMethods = function() {
 	var rect = document.createElementNS(svgns,'rect');
 	rect.setAttribute('width',"1em");
 	rect.setAttribute('height',"1ex");
+	rect.setAttribute('x',"1in");
 	svgcontent.appendChild(rect);
 	var bb = rect.getBBox();
 	unit_types.em = bb.width;
 	unit_types.ex = bb.height;
+	var inch = bb.x;
+	unit_types['in'] = inch;
+	unit_types.cm = inch / 2.54;
+	unit_types.mm = inch / 25.4;
+	unit_types.pt = inch / 72;
+	unit_types.pc = inch / 6;
+	unit_types['%'] = 0;
+	
+	rect.setAttribute('style','vector-effect:non-scaling-stroke');
+	support.nonScalingStroke = (rect.style.vectorEffect === 'non-scaling-stroke');
+
 	svgcontent.removeChild(rect);
 }());
 

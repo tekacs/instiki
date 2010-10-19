@@ -46,10 +46,14 @@
 				langPath: 'locale/',
 				extPath: 'extensions/',
 				jGraduatePath: 'jgraduate/images/',
-				extensions: ['ext-markers.js','ext-connector.js', 'ext-eyedropper.js', 'ext-imagelib.js', 'ext-itex.js'],
+				extensions: ['ext-markers.js','ext-connector.js', 'ext-eyedropper.js', 'ext-imagelib.js','ext-grid.js', 'ext-itex.js'],
 				initTool: 'select',
 				wireframe: false,
-				colorPickerCSS: null
+				colorPickerCSS: null,
+				gridSnapping: false,
+				baseUnit: 'px',
+				snappingStep: 10,
+				showRulers: true
 			},
 			uiStrings = Editor.uiStrings = {
 			"invalidAttrValGiven":"Invalid value given",
@@ -91,7 +95,7 @@
 			if(val) curPrefs[key] = val;
 			key = 'svg-edit-'+key;
 			var host = location.hostname,
-				onweb = host && host.indexOf('.') != -1,
+				onweb = host && host.indexOf('.') >= 0,
 				store = (val != undefined),
 				storage = false;
 			// Some FF versions throw security errors here
@@ -171,6 +175,20 @@
 		}
 
 		Editor.init = function() {
+			// For external openers
+			(function() {
+				// let the opener know SVG Edit is ready
+				var w = window.opener;
+				if (w) {
+			    		try {
+						var svgEditorReadyEvent = w.document.createEvent("Event");
+						svgEditorReadyEvent.initEvent("svgEditorReady", true, true);
+						w.document.documentElement.dispatchEvent(svgEditorReadyEvent);
+			    		}
+					catch(e) {}
+				}
+			})();
+
 			(function() {
 				// Load config/data from URL if given
 				var urldata = $.deparam.querystring(true);
@@ -189,10 +207,15 @@
 
 					svgEditor.setConfig(urldata);
 					
-					// FIXME: This is null if Data URL ends with '='. 
 					var src = urldata.source;
 					var qstr = $.param.querystring();
-
+					
+					if(!src) { // urldata.source may have been null if it ended with '='
+						if(qstr.indexOf('source=data:') >= 0) {
+							src = qstr.match(/source=(data:[^&]*)/)[1];
+						}
+					}
+					
 					if(src) {
 						if(src.indexOf("data:") === 0) {
 							// plusses get replaced by spaces, so re-insert
@@ -225,9 +248,9 @@
 			}
 			
 			// Load extensions
-			// Bit of a hack to run extensions in local Opera
-			if(window.opera && document.location.protocol === 'file:') {
-				setTimeout(extFunc, 1000);
+			// Bit of a hack to run extensions in local Opera/IE9
+			if(document.location.protocol === 'file:') {
+				setTimeout(extFunc, 100);
 			} else {
 				extFunc();
 			}
@@ -235,7 +258,7 @@
 			$.svgIcons(curConfig.imgPath + 'svg_edit_icons.svg', {
 				w:24, h:24,
 				id_match: false,
-				no_img: true,
+ 				no_img: !isWebkit, // Opera & Firefox 4 gives odd behavior w/images
 				fallback_path: curConfig.imgPath,
 				fallback:{
 					'new_image':'clear.png',
@@ -355,10 +378,11 @@
 					
 					'#layer_up':'go_up',
 					'#layer_down':'go_down',
+					'#layer_moreopts':'context_menu',
 					'#layerlist td.layervis':'eye',
 					
-					'#tool_source_save,#tool_docprops_save':'ok',
-					'#tool_source_cancel,#tool_docprops_cancel':'cancel',
+					'#tool_source_save,#tool_docprops_save,#tool_prefs_save':'ok',
+					'#tool_source_cancel,#tool_docprops_cancel,#tool_prefs_cancel':'cancel',
 					
 					'#rwidthLabel, #iwidthLabel':'width',
 					'#rheightLabel, #iheightLabel':'height',
@@ -418,6 +442,12 @@
 					});
 					
 					svgEditor.runCallbacks();
+					
+					setTimeout(function() {
+						$('.flyout_arrow_horiz:empty').each(function() {
+							$(this).append($.getSvgIcon('arrow_right').width(5).height(5));
+						});
+					}, 1);
 				}
 			});
 
@@ -433,18 +463,25 @@
 			           "#ffaaaa", "#ffd4aa", "#ffffaa", "#d4ffaa",
 			           "#aaffaa", "#aaffd4", "#aaffff", "#aad4ff",
 			           "#aaaaff", "#d4aaff", "#ffaaff", "#ffaad4",
-			           ];
-	
-				isMac = false, //(navigator.platform.indexOf("Mac") != -1);
-				modKey = "", //(isMac ? "meta+" : "ctrl+");
+			           ],
+				isMac = (navigator.platform.indexOf("Mac") >= 0),
+				isWebkit = (navigator.userAgent.indexOf("AppleWebKit") >= 0),
+				modKey = (isMac ? "meta+" : "ctrl+"), // ⌘
 				path = svgCanvas.pathActions,
 				undoMgr = svgCanvas.undoMgr,
 				Utils = svgCanvas.Utils,
 				default_img_url = curConfig.imgPath + "logo.png",
 				workarea = $("#workarea"),
+				canv_menu = $("#cmenu_canvas"),
+				layer_menu = $("#cmenu_layers"),
 				show_save_warning = false, 
 				exportWindow = null, 
-				tool_scale = 1;
+				tool_scale = 1,
+				zoomInIcon = 'crosshair',
+				zoomOutIcon = 'crosshair',
+				ui_context = 'toolbars',
+				orig_source = '',
+				paintBox = {fill: null, stroke:null};
 
 			// This sets up alternative dialog boxes. They mostly work the same way as
 			// their UI counterparts, expect instead of returning the result, a callback
@@ -496,10 +533,14 @@
 			}());
 			
 			var setSelectMode = function() {
-				$('.tool_button_current').removeClass('tool_button_current').addClass('tool_button');
-				$('#tool_select').addClass('tool_button_current').removeClass('tool_button');
-				$('#styleoverrides').text('#svgcanvas svg *{cursor:move;pointer-events:all} #svgcanvas svg{cursor:default}');
+				var curr = $('.tool_button_current');
+				if(curr.length && curr[0].id !== 'tool_select') {
+					curr.removeClass('tool_button_current').addClass('tool_button');
+					$('#tool_select').addClass('tool_button_current').removeClass('tool_button');
+					$('#styleoverrides').text('#svgcanvas svg *{cursor:move;pointer-events:all} #svgcanvas svg{cursor:default}');
+				}
 				svgCanvas.setMode('select');
+				workarea.css('cursor','auto');
 			};
 			
 			var togglePathEditMode = function(editmode, elems) {
@@ -526,10 +567,10 @@
 			var multiselected = false;
 			var editingsource = false;
 			var docprops = false;
+			var preferences = false;
+			var cur_context = '';
+			var orig_title = $('title:first').text();
 			
-			var fillPaint = new $.jGraduate.Paint({solidColor: curConfig.initFill.color});
-			var strokePaint = new $.jGraduate.Paint({solidColor: curConfig.initStroke.color});
-		
 			var saveHandler = function(window,svg) {
 				show_save_warning = false;
 			
@@ -539,6 +580,14 @@
 				
 				// Opens the SVG in new window, with warning about Mozilla bug #308590 when applicable
 				
+				var ua = navigator.userAgent;
+
+				// Chrome 5 (and 6?) don't allow saving, show source instead ( http://code.google.com/p/chromium/issues/detail?id=46735 )
+				// IE9 doesn't allow standalone Data URLs ( https://connect.microsoft.com/IE/feedback/details/542600/data-uri-images-fail-when-loaded-by-themselves )
+				if((~ua.indexOf('Chrome') && $.browser.version >= 533) || ~ua.indexOf('MSIE')) {
+					showSourceEditor(0,true);
+					return;	
+				}
 				var win = window.open("data:image/svg+xml;base64," + Utils.encode64(svg));
 				
 				// Alert will only appear the first time saved OR the first time the bug is encountered
@@ -548,7 +597,7 @@
 					var note = uiStrings.saveFromBrowser.replace('%s', 'SVG');
 					
 					// Check if FF and has <defs/>
-					if(navigator.userAgent.indexOf('Gecko/') !== -1) {
+					if(ua.indexOf('Gecko/') !== -1) {
 						if(svg.indexOf('<defs') !== -1) {
 							note += "\n\n" + uiStrings.defsFailOnSave;
 							$.pref('save_notice_done', 'all');
@@ -576,30 +625,31 @@
 				
 				c.width = svgCanvas.contentW;
 				c.height = svgCanvas.contentH;
-				canvg(c, data.svg);
-				var datauri = c.toDataURL('image/png');
-				exportWindow.location.href = datauri;
-				
-				var done = $.pref('export_notice_done');
-				if(done !== "all") {
-					var note = uiStrings.saveFromBrowser.replace('%s', 'PNG');
-					
-					// Check if there's issues
-					if(issues.length) {
-						var pre = "\n \u2022 ";
-						note += ("\n\n" + uiStrings.noteTheseIssues + pre + issues.join(pre));
-					} 
-					
-					// Note that this will also prevent the notice even though new issues may appear later.
-					// May want to find a way to deal with that without annoying the user
-					$.pref('export_notice_done', 'all'); 
-					exportWindow.alert(note);
-				}
+				canvg(c, data.svg, {renderCallback: function() {
+					var datauri = c.toDataURL('image/png');
+					exportWindow.location.href = datauri;
+					var done = $.pref('export_notice_done');
+					if(done !== "all") {
+						var note = uiStrings.saveFromBrowser.replace('%s', 'PNG');
+						
+						// Check if there's issues
+						if(issues.length) {
+							var pre = "\n \u2022 ";
+							note += ("\n\n" + uiStrings.noteTheseIssues + pre + issues.join(pre));
+						} 
+						
+						// Note that this will also prevent the notice even though new issues may appear later.
+						// May want to find a way to deal with that without annoying the user
+						$.pref('export_notice_done', 'all'); 
+						exportWindow.alert(note);
+					}
+				}});
 			};
 			
 			// called when we've selected a different element
 			var selectedChanged = function(window,elems) {
 				var mode = svgCanvas.getMode();
+				if(mode === "select") setSelectMode();
 				var is_node = (mode == "pathedit");
 				// if elems[1] is present, then we have more than one element
 				selectedElement = (elems.length == 1 || elems[1] == null ? elems[0] : null);
@@ -608,9 +658,8 @@
 					// unless we're already in always set the mode of the editor to select because
 					// upon creation of a text element the editor is switched into
 					// select mode and this event fires - we need our UI to be in sync
-					
-					if (mode != "multiselect" && !is_node) {
-						setSelectMode();
+
+					if (!is_node) {
 						updateToolbar();
 					} 
 					
@@ -628,11 +677,16 @@
 		
 			// called when any element has changed
 			var elementChanged = function(window,elems) {
+				var mode = svgCanvas.getMode();
+				if(mode === "select") {
+					setSelectMode();
+				}
+				
 				for (var i = 0; i < elems.length; ++i) {
 					var elem = elems[i];
 					
 					// if the element changed was the svg, then it could be a resolution change
-					if (elem && elem.tagName == "svg") {
+					if (elem && elem.tagName === "svg") {
 						populateLayers();
 						updateCanvas();
 					} 
@@ -655,6 +709,12 @@
 				// text element was previously in focus
 				updateContextPanel();
 				
+				// In the event a gradient was flipped:
+				if(selectedElement && mode === "select") {
+					paintBox.fill.update();
+					paintBox.stroke.update();
+				}
+				
 				svgCanvas.runExtensions("elementChanged", {
 					elems: elems
 				});
@@ -665,7 +725,6 @@
 					res = svgCanvas.getResolution(),
 					w_area = workarea,
 					canvas_pos = $('#svgcanvas').position();
-				w_area.css('cursor','auto');
 				var z_info = svgCanvas.setBBoxZoom(bbox, w_area.width()-scrbar, w_area.height()-scrbar);
 				if(!z_info) return;
 				var zoomlevel = z_info.zoom,
@@ -682,7 +741,60 @@
 					// Go to select if a zoom box was drawn
 					setSelectMode();
 				}
+				
 				zoomDone();
+			}
+			
+			$('#cur_context_panel').delegate('a', 'click', function() {
+				var link = $(this);
+				if(link.attr('data-root')) {
+					svgCanvas.leaveContext();
+				} else {
+					svgCanvas.setContext(link.text());
+				}
+				return false;
+			});
+			
+			var contextChanged = function(win, context) {
+				$('#workarea,#sidepanels').css('top', context?100:75);
+				$('#rulers').toggleClass('moved', context);
+				if(cur_context && !context) {
+					// Back to normal
+					workarea[0].scrollTop -= 25;
+				} else if(!cur_context && context) {
+					workarea[0].scrollTop += 25;
+				}
+				
+				var link_str = '';
+				if(context) {
+					var str = '';
+					link_str = '<a href="#" data-root="y">' + svgCanvas.getCurrentLayer() + '</a>';
+					
+					$(context).parentsUntil('#svgcontent > g').andSelf().each(function() {
+						if(this.id) {
+							str += ' > ' + this.id;
+							if(this !== context) {
+								link_str += ' > <a href="#">' + this.id + '</a>';
+							} else {
+								link_str += ' > ' + this.id;
+							}
+						}
+					});
+
+					cur_context = str;
+				} else {
+					cur_context = null;
+				}
+				$('#cur_context_panel').toggle(!!context).html(link_str);
+
+				
+				updateTitle();
+			}
+			
+			// Makes sure the current selected paint is available to work with
+			var prepPaints = function() {
+				paintBox.fill.prep();
+				paintBox.stroke.prep();
 			}
 			
 			var flyout_funcs = {};
@@ -712,7 +824,7 @@
 									opts.fn();
 								}
 								if(opts.icon) {
-									var icon = $.getSvgIcon(opts.icon).clone();
+									var icon = $.getSvgIcon(opts.icon, true);
 								} else {
 									// 
 									var icon = $(opts.sel).children().eq(0).clone();
@@ -1151,7 +1263,7 @@
 					$.svgIcons(svgicons, {
 						w:24, h:24,
 						id_match: false,
-						no_img: true,
+						no_img: (!!window.opera),
 						fallback: fallback_obj,
 						placement: placement_obj,
 						callback: function(icons) {
@@ -1169,15 +1281,21 @@
 				runCallback();
 			};
 			
-			var getPaint = function(color, opac) {
+			var getPaint = function(color, opac, type) {
 				// update the editor's fill paint
 				var opts = null;
-				if (color.substr(0,5) == "url(#") {
-					var grad = document.getElementById(color.substr(5,color.length-6));
+				if (color.indexOf("url(#") === 0) {
+					var refElem = svgCanvas.getRefElem(color);
+					if(refElem) {
+						refElem = refElem.cloneNode(true);
+					} else {
+						refElem =  $("#" + type + "_color defs *")[0];
+					}
+					
 					opts = { alpha: opac };
-					opts[grad.tagName] = grad;
+					opts[refElem.tagName] = refElem;
 				} 
-				else if (color.substr(0,1) == "#") {
+				else if (color.indexOf("#") === 0) {
 					opts = {
 						alpha: opac,
 						solidColor: color.substr(1)
@@ -1195,63 +1313,13 @@
 			// updates the toolbar (colors, opacity, etc) based on the selected element
 			// This function also updates the opacity and id elements that are in the context panel
 			var updateToolbar = function() {
-				if (selectedElement != null && $.inArray(selectedElement.tagName, ['use', 'image', 'foreignObject', 'g', 'a']) === -1) {
+				if (selectedElement != null && ['use', 'image', 'foreignObject', 'g', 'a'].indexOf(selectedElement.tagName) === -1) {
 				
-					// get opacity values
-					var fillOpacity = parseFloat(selectedElement.getAttribute("fill-opacity"));
-					if (isNaN(fillOpacity)) {
-						fillOpacity = 1.0;
-					}
+					paintBox.fill.update(true);
+					paintBox.stroke.update(true);
 					
-					var strokeOpacity = parseFloat(selectedElement.getAttribute("stroke-opacity"));
-					if (isNaN(strokeOpacity)) {
-						strokeOpacity = 1.0;
-					}
-		
-					// update fill color and opacity
-					var fillColor = selectedElement.getAttribute("fill")||"black";
-					// prevent undo on these canvas changes
-					svgCanvas.setColor('fill', fillColor, true);
-					svgCanvas.setPaintOpacity('fill', fillOpacity, true);
-		
-					// update stroke color and opacity
-					var strokeColor = selectedElement.getAttribute("stroke")||"none";
-					// prevent undo on these canvas changes
-					svgCanvas.setColor('stroke', strokeColor, true);
-					svgCanvas.setPaintOpacity('stroke', strokeOpacity, true);
-		
-					// update the rect inside #fill_color
-					$("#stroke_color rect").attr({
-						fill: strokeColor,
-						opacity: strokeOpacity
-					});
-
-					// update the rect inside #fill_color
-					$("#fill_color rect").attr({
-						fill: fillColor,
-						opacity: fillOpacity
-					});
-		
-					fillOpacity *= 100;
-					strokeOpacity *= 100;
-					
-					fillPaint = getPaint(fillColor, fillOpacity);
-					strokePaint = getPaint(strokeColor, strokeOpacity);
-					
-					fillOpacity = fillOpacity + " %";
-					strokeOpacity = strokeOpacity + " %";
-		
-					// update fill color
-					if (fillColor == "none") {
-						fillOpacity = "N/A";
-					}
-					if (strokeColor == null || strokeColor == "" || strokeColor == "none") {
-						strokeColor = "none";
-						strokeOpacity = "N/A";
-					}
-					
-					$('#stroke_width').val(selectedElement.getAttribute("stroke-width")||1).change();
-					$('#stroke_style').val(selectedElement.getAttribute("stroke-dasharray")||"none").change();
+					$('#stroke_width').val(selectedElement.getAttribute("stroke-width")||1);
+					$('#stroke_style').val(selectedElement.getAttribute("stroke-dasharray")||"none");
 
 					var attr = selectedElement.getAttribute("stroke-linejoin") || 'miter';
 					
@@ -1262,7 +1330,6 @@
 					
 					if ($('#linecap_' + attr).length != 0)
 						setStrokeOpt($('#linecap_' + attr)[0]);
-
 				}
 				
 				// All elements including image and group have opacity
@@ -1323,6 +1390,7 @@
 					return;
 				}
 				var is_node = currentMode == 'pathedit'; //elem ? (elem.id && elem.id.indexOf('pathpointgrip') == 0) : false;
+				var menu_items = $('#cmenu_canvas li');
 				$('#selected_panel, #multiselected_panel, #g_panel, #rect_panel, #circle_panel,\
 					#ellipse_panel, #line_panel, #text_panel, #image_panel, #container_panel, #use_panel').hide();
 				if (elem != null) {
@@ -1345,10 +1413,8 @@
 					
 					if(svgCanvas.addedNew) {
 						if(elname == 'image') {
-							var xlinkNS = "http://www.w3.org/1999/xlink";
-							var href = elem.getAttributeNS(xlinkNS, "href");
 							// Prompt for URL if not a data URL
-							if(href.indexOf('data:') !== 0) {
+							if(svgCanvas.getHref(elem).indexOf('data:') !== 0) {
 								promptImgURL();
 							}
 						} else if(elname == 'text') {
@@ -1359,12 +1425,12 @@
 					if(!is_node && currentMode != 'pathedit') {
 						$('#selected_panel').show();
 						// Elements in this array already have coord fields
-						if($.inArray(elname, ['line', 'circle', 'ellipse']) != -1) {
+						if(['line', 'circle', 'ellipse'].indexOf(elname) >= 0) {
 							$('#xy_panel').hide();
 						} else {
 							var x,y;
 							// Get BBox vals for g, polyline and path
-							if($.inArray(elname, ['g', 'polyline', 'path']) != -1) {
+							if(['g', 'polyline', 'path'].indexOf(elname) >= 0) {
 								var bb = svgCanvas.getStrokedBBox([elem]);
 								if(bb) {
 									x = bb.x;
@@ -1380,7 +1446,7 @@
 						}
 						
 						// Elements in this array cannot be converted to a path
-						var no_path = $.inArray(elname, ['image', 'text', 'path', 'g', 'use']) == -1;
+						var no_path = ['image', 'text', 'path', 'g', 'use'].indexOf(elname) == -1;
 						$('#tool_topath').toggle(no_path);
 						$('#tool_reorient').toggle(elname == 'path');
 						$('#tool_reorient').toggleClass('disabled', angle == 0);
@@ -1451,15 +1517,16 @@
 							$('#font_size').val(elem.getAttribute("font-size"));
 							$('#text').val(elem.textContent);
 							if (svgCanvas.addedNew) {
-								$('#text').focus().select();
+								// Timeout needed for IE9
+								setTimeout(function() {
+									$('#text').focus().select();
+								},100);
 							}
 						} // text
 						else if(el_name == 'image') {
-							var xlinkNS="http://www.w3.org/1999/xlink";
-							var href = elem.getAttributeNS(xlinkNS, "href");
-							setImageURL(href);
+							setImageURL(svgCanvas.getHref(elem));
 						} // image
-						else if(el_name == 'g' || el_name == 'use') {
+						else if(el_name === 'g' || el_name === 'use') {
 							$('#container_panel').show();
 							var title = svgCanvas.getTitle();
 							var label = $('#g_title')[0];
@@ -1473,9 +1540,16 @@
 							}
 						}
 					}
+					menu_items[(el_name === 'g' ? 'en':'dis') + 'ableContextMenuItems']('#ungroup');
+					menu_items[((el_name === 'g' || !multiselected) ? 'dis':'en') + 'ableContextMenuItems']('#group');
 				} // if (elem != null)
 				else if (multiselected) {
 					$('#multiselected_panel').show();
+					menu_items
+						.enableContextMenuItems('#group')
+						.disableContextMenuItems('#ungroup');
+				} else {
+					menu_items.disableContextMenuItems('#delete,#cut,#copy,#group,#ungroup,#move_front,#move_up,#move_down,#move_back');
 				}
 				
 				// update history buttons
@@ -1497,6 +1571,9 @@
 				if ( (elem && !is_node)	|| multiselected) {
 					// update the selected elements' layer
 					$('#selLayerNames').removeAttr('disabled').val(currentLayer);
+					
+					// Enable regular menu options
+					canv_menu.enableContextMenuItems('#delete,#cut,#copy,#move_front,#move_up,#move_down,#move_back');
 				}
 				else {
 					$('#selLayerNames').attr('disabled', 'disabled');
@@ -1512,6 +1589,7 @@
 			svgCanvas.bind("saved", saveHandler);
 			svgCanvas.bind("exported", exportHandler);
 			svgCanvas.bind("zoomed", zoomChanged);
+			svgCanvas.bind("contextset", contextChanged);
 			svgCanvas.bind("extension_added", extAdded);
 			svgCanvas.textActions.setInputElem($("#text")[0]);
 		
@@ -1561,7 +1639,7 @@
 			
 			var changeStrokeWidth = function(ctl) {
 				var val = ctl.value;
-				if(val == 0 && selectedElement && $.inArray(selectedElement.nodeName, ['line', 'polyline']) != -1) {
+				if(val == 0 && selectedElement && ['line', 'polyline'].indexOf(selectedElement.nodeName) >= 0) {
 					val = ctl.value = 1;
 				}
 				svgCanvas.setStrokeWidth(val);
@@ -1683,6 +1761,13 @@
 					this.value = selectedElement.getAttribute(attr);
 					return false;
 				}
+				
+				// Convert unitless value to one with given unit
+				if(curConfig.baseUnit !== 'px' && !isNaN(val) ) {
+					val += curConfig.baseUnit;
+					this.value = val;
+				}
+				
 				// if the user is changing the id, then de-select the element first
 				// change the ID, then re-select it with the new ID
 				if (attr == "id") {
@@ -1701,29 +1786,27 @@
 				var inp = $('<input type="hidden">');
 				$(this).append(inp);
 				inp.focus().remove();
-			});
-		
-			$('.palette_item').click(function(evt){
-				var picker = (evt.shiftKey ? "stroke" : "fill");
-				var id = (evt.shiftKey ? '#stroke_' : '#fill_');
+			})
+			
+			$('.palette_item').mousedown(function(evt){
+				var right_click = evt.button === 2;
+				var isStroke = evt.shiftKey || right_click;
+				var picker = isStroke ? "stroke" : "fill";
 				var color = $(this).attr('data-rgb');
-				var rectbox = document.getElementById("gradbox_"+picker).parentNode.firstChild;
 				var paint = null;
 		
 				// Webkit-based browsers returned 'initial' here for no stroke
-				if (color == 'transparent' || color == 'initial') {
+				if (color === 'transparent' || color === 'initial') {
 					color = 'none';
-					$(id + "opacity").html("N/A");
 					paint = new $.jGraduate.Paint();
 				}
 				else {
 					paint = new $.jGraduate.Paint({alpha: 100, solidColor: color.substr(1)});
 				}
-				rectbox.setAttribute("fill", color);
-				rectbox.setAttribute("opacity", 1);
 				
-				if (evt.shiftKey) {
-					strokePaint = paint;
+				paintBox[picker].setPaint(paint);
+				
+				if (isStroke) {
 					if (svgCanvas.getColor('stroke') != color) {
 						svgCanvas.setColor('stroke', color);
 					}
@@ -1731,7 +1814,6 @@
 						svgCanvas.setPaintOpacity('stroke', 1.0);
 					}
 				} else {
-					fillPaint = paint;
 					if (svgCanvas.getColor('fill') != color) {
 						svgCanvas.setColor('fill', color);
 					}
@@ -1740,7 +1822,7 @@
 					}
 				}
 				updateToolButtonState();
-			});
+			}).bind('contextmenu', function(e) {e.preventDefault()});
 		
 			$("#toggle_stroke_tools").toggle(function() {
 				$(".stroke_tool").css('display','table-cell');
@@ -1763,10 +1845,9 @@
 					$('.tools_flyout').fadeOut(fadeFlyouts);
 				}
 				$('#styleoverrides').text('');
+				workarea.css('cursor','auto');
 				$('.tool_button_current').removeClass('tool_button_current').addClass('tool_button');
 				$(button).addClass('tool_button_current').removeClass('tool_button');
-				// when a tool is selected, we should deselect any currently selected elements
-				svgCanvas.clearSelection();
 				return true;
 			};
 			
@@ -1804,7 +1885,15 @@
 				}).bind('keyup', 'space', function(evt) {
 					evt.preventDefault();
 					svgCanvas.spaceKey = keypan = false;
-				});
+				}).bind('keydown', 'shift', function(evt) {
+					if(svgCanvas.getMode() === 'zoom') {
+						workarea.css('cursor', zoomOutIcon);
+					}
+				}).bind('keyup', 'shift', function(evt) {
+					if(svgCanvas.getMode() === 'zoom') {
+						workarea.css('cursor', zoomInIcon);
+					}
+				})
 			}());
 			
 			
@@ -1851,8 +1940,11 @@
 					}
 					on_button = false;
 				}).mousedown(function(evt) {
-					var islib = $(evt.target).closest('div.tools_flyout').length;
-					if(!islib) $('.tools_flyout:visible').fadeOut();
+// 					$(".contextMenu").hide();
+// 					console.log('cm', $(evt.target).closest('.contextMenu'));
+				
+					var islib = $(evt.target).closest('div.tools_flyout, .contextMenu').length;
+					if(!islib) $('.tools_flyout:visible,.contextMenu').fadeOut(250);
 				});
 				
 				overlay.bind('mousedown',function() {
@@ -2089,19 +2181,19 @@
 					$(inp).blur();
 				}
 				
-				// Do not include the #text input, as it needs to remain focused 
-				// when clicking on an SVG text element.
-				$('#svg_editor input:text:not(#text)').focus(function() {
+				$('#svg_editor').find('button, select, input:not(#text)').focus(function() {
 					inp = this;
+					ui_context = 'toolbars';
 					workarea.mousedown(unfocus);
 				}).blur(function() {
+					ui_context = 'canvas';
 					workarea.unbind('mousedown', unfocus);
-					
 					// Go back to selecting text if in textedit mode
 					if(svgCanvas.getMode() == 'textedit') {
 						$('#text').focus();
 					}
 				});
+				
 			}());
 
 			var clickSelect = function() {
@@ -2167,8 +2259,8 @@
 		
 			var clickZoom = function(){
 				if (toolButtonClick('#tool_zoom')) {
-					workarea.css('cursor','crosshair');
 					svgCanvas.setMode('zoom');
+					workarea.css('cursor', zoomInIcon);
 				}
 			};
 		
@@ -2180,13 +2272,15 @@
 			};
 		
 			var clickText = function(){
-				toolButtonClick('#tool_text');
-				svgCanvas.setMode('text');
+				if (toolButtonClick('#tool_text')) {
+					svgCanvas.setMode('text');
+				}
 			};
 			
 			var clickPath = function(){
-				toolButtonClick('#tool_path');
-				svgCanvas.setMode('path');
+				if (toolButtonClick('#tool_path')) {
+					svgCanvas.setMode('path');
+				}
 			};
 			
 			// Delete is a contextual tool that only appears in the ribbon if
@@ -2197,15 +2291,33 @@
 				}
 			};
 		
+			var cutSelected = function() {
+				if (selectedElement != null || multiselected) {
+					svgCanvas.cutSelectedElements();
+				}
+			};
+			
+			var copySelected = function() {
+				if (selectedElement != null || multiselected) {
+					svgCanvas.copySelectedElements();
+				}
+			};
+			
 			var moveToTopSelected = function() {
 				if (selectedElement != null) {
 					svgCanvas.moveToTopSelectedElement();
 				}
 			};
-		
+			
 			var moveToBottomSelected = function() {
 				if (selectedElement != null) {
 					svgCanvas.moveToBottomSelectedElement();
+				}
+			};
+			
+			var moveUpDownSelected = function(dir) {
+				if (selectedElement != null) {
+					svgCanvas.moveUpDownSelected(dir);
 				}
 			};
 
@@ -2223,6 +2335,12 @@
 		
 			var moveSelected = function(dx,dy) {
 				if (selectedElement != null || multiselected) {
+					if(curConfig.gridSnapping) {
+						// Use grid snap value regardless of zoom level
+						var multi = svgCanvas.getZoom() * curConfig.snappingStep;
+						dx *= multi;
+						dy *= multi;
+					}
 					svgCanvas.moveSelectedElements(dx,dy);
 				}
 			};
@@ -2274,9 +2392,8 @@
 				svgCanvas.cycleElement(0);
 			};
 			
-			var rotateSelected = function(cw) {
+			var rotateSelected = function(cw,step) {
 				if (selectedElement == null || multiselected) return;
-				var step = 5;
 				if(!cw) step *= -1;
 				var new_angle = $('#angle').val()*1 + step;
 				svgCanvas.setRotationAngle(new_angle);
@@ -2294,6 +2411,7 @@
 					zoomImage();
 					populateLayers();
 					updateContextPanel();
+					prepPaints();
 				});
 			};
 			
@@ -2422,17 +2540,21 @@
 				$('#wireframe_rules').text(workarea.hasClass('wireframe') ? rule : "");
 			}
 		
-			var showSourceEditor = function(){
+			var showSourceEditor = function(e, forSaving){
 				if (editingsource) return;
 				editingsource = true;
-				var str = svgCanvas.getSvgString();
+				
+				$('#save_output_btns').toggle(!!forSaving);
+				$('#tool_source_back').toggle(!forSaving);
+				
+				var str = orig_source = svgCanvas.getSvgString();
 				$('#svg_source_textarea').val(str);
 				$('#svg_source_editor').fadeIn();
 				properlySourceSizeTextArea();
 				$('#svg_source_textarea').focus();
 			};
 			
-			$('#svg_docprops_container').draggable({cancel:'button,fieldset'});
+			$('#svg_docprops_container, #svg_prefs_container').draggable({cancel:'button,fieldset'});
 			
 			var showDocProperties = function(){
 				if (docprops) return;
@@ -2446,6 +2568,15 @@
 				$('#canvas_width').val(res.w);
 				$('#canvas_height').val(res.h);
 				$('#canvas_title').val(svgCanvas.getDocumentTitle());
+				
+				$('#svg_docprops').fadeIn();
+			};
+			
+			
+			var showPreferences = function(){
+				if (preferences) return;
+				preferences = true;
+				$('#main_menu').hide();
 				
 				// Update background color with current one
 				var blocks = $('#bg_blocks div');
@@ -2463,9 +2594,15 @@
 				if(url) {
 					$('#canvas_bg_url').val(url);
 				}
+				$('grid_snapping_step').attr('value', curConfig.snappingStep);
+				if (curConfig.gridSnapping == true) {
+				    $('#grid_snapping_on').attr('checked', 'checked');
+				} else {
+				    $('#grid_snapping_on').removeAttr('checked');
+				}
 				
-				$('#svg_docprops').fadeIn();
-			};
+				$('#svg_prefs').fadeIn();
+			};			
 			
 			var properlySourceSizeTextArea = function(){
 				// TODO: remove magic numbers here and get values from CSS
@@ -2481,7 +2618,8 @@
 					hideSourceEditor();
 					zoomImage();
 					populateLayers();
-					setTitle(svgCanvas.getDocumentTitle());
+					updateTitle();
+					prepPaints();
 				}
 		
 				if (!svgCanvas.setSvgString($('#svg_source_textarea').val())) {
@@ -2495,16 +2633,21 @@
 				setSelectMode();		
 			};
 			
-			var setTitle = function(title) {
-				var editor_title = $('title:first').text().split(':')[0];
-				var new_title = editor_title + (title?': ' + title:'');
+			var updateTitle = function(title) {
+				title = title || svgCanvas.getDocumentTitle();
+				var new_title = orig_title + (title?': ' + title:'');
+				
+				// Remove title update with current context info, isn't really necessary
+// 				if(cur_context) {
+// 					new_title = new_title + cur_context;
+// 				}
 				$('title:first').text(new_title);
 			}
 			
 			var saveDocProperties = function(){
 				// set title
 				var new_title = $('#canvas_title').val();
-				setTitle(new_title);
+				updateTitle(new_title);
 				svgCanvas.setDocumentTitle(new_title);
 			
 				// update resolution
@@ -2535,7 +2678,11 @@
 				// set image save option
 				curPrefs.img_save = $('#image_save_opts :checked').val();
 				$.pref('img_save',curPrefs.img_save);
-				
+				updateCanvas();
+				hideDocProperties();
+			};
+			
+			var savePreferences = function() {
 				// set background
 				var color = $('#bg_blocks div.cur_background').css('background-color') || '#FFF';
 				setBackground(color, $('#canvas_bg_url').val());
@@ -2549,9 +2696,20 @@
 				// set icon size
 				setIconSize($('#iconsize').val());
 				
+				// set grid setting
+				curConfig.gridSnapping = $('#grid_snapping_on')[0].checked;
+				curConfig.snappingStep = $('#grid_snapping_step').val();
+				curConfig.showRulers = $('#show_rulers')[0].checked;
+				
+				$('#rulers').toggle(curConfig.showRulers);
+				if(curConfig.showRulers) updateRulers();
+				curConfig.baseUnit = $('#base_unit').val();
+				
+				svgCanvas.setConfig(curConfig);
+
 				updateCanvas();
-				hideDocProperties();
-			};
+				hidePreferences();
+			}
 			
 			function setBackground(color, url) {
 // 				if(color == curPrefs.bkgd_color && url == curPrefs.bkgd_url) return;
@@ -2563,25 +2721,13 @@
 			}
 			
 			var setIcon = Editor.setIcon = function(elem, icon_id, forcedSize) {
-				var icon = (typeof icon_id == 'string') ? $.getSvgIcon(icon_id) : icon_id;
+				var icon = (typeof icon_id === 'string') ? $.getSvgIcon(icon_id, true) : icon_id.clone();
 				if(!icon) {
 					console.log('NOTE: Icon image missing: ' + icon_id);
 					return;
 				}
-				icon = icon.clone();
+
 				$(elem).empty().append(icon);
-// 				if(forcedSize) {
-// 					var obj = {};
-// 					obj[elem + ' .svg_icon'] = forcedSize;
-// 					$.resizeSvgIcons(obj);
-// 				} else {
-// 					var size = curPrefs.iconsize;
-// 					if(size && size !== 'm') {
-// 						var icon_sizes = { s:16, m:24, l:32, xl:48}, obj = {};
-// 						obj[elem + ' .svg_icon'] = icon_sizes[size];
-// 						$.resizeSvgIcons(obj);
-// 					}
-// 				}
 			}
 		
 			var ua_prefix;
@@ -2855,11 +3001,15 @@
 		
 			var cancelOverlays = function() {
 				$('#dialog_box').hide();
-				if (!editingsource && !docprops) return;
+				if (!editingsource && !docprops && !preferences) {
+					if(cur_context) {
+						svgCanvas.leaveContext();
+					}
+					return;
+				};
 		
 				if (editingsource) {
-					var oldString = svgCanvas.getSvgString();
-					if (oldString != $('#svg_source_textarea').val()) {
+					if (orig_source !== $('#svg_source_textarea').val()) {
 						$.confirm(uiStrings.QignoreSourceChanges, function(ok) {
 							if(ok) hideSourceEditor();
 						});
@@ -2869,6 +3019,8 @@
 				}
 				else if (docprops) {
 					hideDocProperties();
+				} else if (preferences) {
+					hidePreferences();
 				}
 		
 			};
@@ -2886,6 +3038,11 @@
 				$('#image_save_opts input').val([curPrefs.img_save]);
 				docprops = false;
 			};
+			
+			var hidePreferences = function(){
+				$('#svg_prefs').hide();
+				preferences = false;
+			};
 
 			var win_wh = {width:$(window).width(), height:$(window).height()};
 			
@@ -2901,6 +3058,14 @@
 				});
 			});
 			
+			(function() {
+				workarea.scroll(function() {
+					$('#ruler_x')[0].scrollLeft = workarea[0].scrollLeft;
+					$('#ruler_y')[0].scrollTop = workarea[0].scrollTop;
+				});
+
+			}());
+			
 			$('#url_notice').click(function() {
 				$.alert(this.title);
 			});
@@ -2908,7 +3073,9 @@
 			$('#change_image_url').click(promptImgURL);
 			
 			function promptImgURL() {
-				$.prompt(uiStrings.enterNewImgURL, default_img_url, function(url) {
+				var curhref = svgCanvas.getHref(selectedElement);
+				curhref = curhref.indexOf("data:") === 0?"":curhref;
+				$.prompt(uiStrings.enterNewImgURL, curhref, function(url) {
 					if(url) setImageURL(url);
 				});
 			}
@@ -2945,9 +3112,11 @@
 				var i = shortcutButtons.length;
 				while (i--) {
 					var button = document.getElementById(shortcutButtons[i]);
-					var title = button.title;
-					var index = title.indexOf("Ctrl+");
-					button.title = [title.substr(0,index), "Cmd+", title.substr(index+5)].join('');
+					if (button != null) {
+						var title = button.title;
+						var index = title.indexOf("Ctrl+");
+						button.title = [title.substr(0, index), "Cmd+", title.substr(index + 5)].join('');
+					}
 				}
 			}
 			
@@ -2956,12 +3125,12 @@
 			var colorPicker = function(elem) {
 				var picker = elem.attr('id') == 'stroke_color' ? 'stroke' : 'fill';
 // 				var opacity = (picker == 'stroke' ? $('#stroke_opacity') : $('#fill_opacity'));
-				var paint = (picker == 'stroke' ? strokePaint : fillPaint);
+				var paint = paintBox[picker].paint;
 				var title = (picker == 'stroke' ? 'Pick a Stroke Paint and Opacity' : 'Pick a Fill Paint and Opacity');
 				var was_none = false;
 				var pos = elem.position();
 				$("#color_picker")
-					.draggable({cancel:'.jPicker_table,.jGraduate_lgPick,.jGraduate_rgPick'})
+					.draggable({cancel:'.jGraduate_tabs,.jGraduate_colPick,.jGraduate_lgPick,.jGraduate_rgPick'})
 					.css(curConfig.colorPickerCSS || {'left': pos.left, 'bottom': 50 - pos.top})
 					.jGraduate(
 					{ 
@@ -2972,30 +3141,9 @@
 					function(p) {
 						paint = new $.jGraduate.Paint(p);
 						
-						var oldgrad = document.getElementById("gradbox_"+picker);
-						var svgbox = oldgrad.parentNode;
-						var rectbox = svgbox.firstChild;
-						if (paint.type == "linearGradient" || paint.type == "radialGradient") {
-							svgbox.removeChild(oldgrad);
-							var newgrad = svgbox.appendChild(document.importNode(paint[paint.type], true));
-							newgrad.id = "gradbox_"+picker;
-							rectbox.setAttribute("fill", "url(#gradbox_" + picker + ")");
-							rectbox.setAttribute("opacity", paint.alpha/100);
-						}
-						else {
-							rectbox.setAttribute("fill", paint.solidColor != "none" ? "#" + paint.solidColor : "none");
-							rectbox.setAttribute("opacity", paint.alpha/100);
-						}
-		
-						if (picker == 'stroke') {
-							svgCanvas.setPaint('stroke', paint);
-							strokePaint = paint;
-						}
-						else {
-							svgCanvas.setPaint('fill', paint);
-							fillPaint = paint;
-						}
-						updateToolbar();
+						paintBox[picker].setPaint(paint);
+						svgCanvas.setPaint(picker, paint);
+						
 						$('#color_picker').hide();
 					},
 					function(p) {
@@ -3059,44 +3207,124 @@
 		
 				operaRepaint();
 			};
-		
-			// set up gradients to be used for the buttons
-			var svgdocbox = new DOMParser().parseFromString(
-				'<svg xmlns="http://www.w3.org/2000/svg"><rect width="100%" height="100%"\
-				fill="#' + curConfig.initFill.color + '" opacity="' + curConfig.initFill.opacity + '"/>\
-				<linearGradient id="gradbox_">\
-						<stop stop-color="#000" offset="0.0"/>\
-						<stop stop-color="#FF0000" offset="1.0"/>\
-				</linearGradient></svg>', 'text/xml');
-		
-			var boxgrad = svgdocbox.getElementById('gradbox_');
-			boxgrad.id = 'gradbox_fill';
-			svgdocbox.documentElement.setAttribute('width',16.5);
-			$('#fill_color').append( document.importNode(svgdocbox.documentElement,true) );
 			
-			boxgrad.id = 'gradbox_stroke';	
-			svgdocbox.documentElement.setAttribute('width',16.5);
-			$('#stroke_color').append( document.importNode(svgdocbox.documentElement,true) );
-			$('#stroke_color rect').attr({
-				'fill': '#' + curConfig.initStroke.color,
-				'opacity': curConfig.initStroke.opacity
-			});
+
+
+			var PaintBox = function(container, type) {
+				var cur = curConfig[type === 'fill' ? 'initFill' : 'initStroke'];
+				
+				// set up gradients to be used for the buttons
+				var svgdocbox = new DOMParser().parseFromString(
+					'<svg xmlns="http://www.w3.org/2000/svg"><rect width="100%" height="100%"\
+					fill="#' + cur.color + '" opacity="' + cur.opacity + '"/>\
+					<defs><linearGradient id="gradbox_"/></defs></svg>', 'text/xml');
+				var docElem = svgdocbox.documentElement;
+				
+				docElem = $(container)[0].appendChild(document.importNode(docElem, true));
+
+				docElem.setAttribute('width',16.5);
+				
+				this.rect = docElem.firstChild;
+				this.defs = docElem.getElementsByTagName('defs')[0];
+				this.grad = this.defs.firstChild;
+				this.paint = new $.jGraduate.Paint({solidColor: cur.color});
+				this.type = type;
+
+				this.setPaint = function(paint, apply) {
+					this.paint = paint;
+					
+					var fillAttr = "none";
+					var ptype = paint.type;
+					var opac = paint.alpha / 100;
+					
+					switch ( ptype ) {
+						case 'solidColor':
+							fillAttr = "#" + paint[ptype];
+							break;
+						case 'linearGradient':
+						case 'radialGradient':
+							this.defs.removeChild(this.grad);
+							this.grad = this.defs.appendChild(paint[ptype]);
+							var id = this.grad.id = 'gradbox_' + this.type;
+							fillAttr = "url(#" + id + ')';
+					}
+					
+					this.rect.setAttribute('fill', fillAttr);
+					this.rect.setAttribute('opacity', opac);
+					
+					if(apply) {
+						svgCanvas.setColor(this.type, paintColor, true);
+						svgCanvas.setPaintOpacity(this.type, paintOpacity, true);
+					}
+				}
+				
+				this.update = function(apply) {
+					if(!selectedElement) return;
+					var type = this.type;
+					var paintOpacity = parseFloat(selectedElement.getAttribute(type + "-opacity"));
+					if (isNaN(paintOpacity)) {
+						paintOpacity = 1.0;
+					}
+					
+					var defColor = type === "fill" ? "black" : "none";
+					var paintColor = selectedElement.getAttribute(type) || defColor;
+					
+					if(apply) {
+						svgCanvas.setColor(type, paintColor, true);
+						svgCanvas.setPaintOpacity(type, paintOpacity, true);
+					}
+					
+					paintOpacity *= 100;
+					
+					var paint = getPaint(paintColor, paintOpacity, type);
+					// update the rect inside #fill_color/#stroke_color
+					this.setPaint(paint);
+				}
+				
+				this.prep = function() {
+					var ptype = this.paint.type;
+				
+					switch ( ptype ) {
+						case 'linearGradient':
+						case 'radialGradient':
+							var paint = new $.jGraduate.Paint({copy: this.paint});
+							svgCanvas.setPaint(type, paint);
+					}
+				}
+			};
 			
+			paintBox.fill = new PaintBox('#fill_color', 'fill');
+			paintBox.stroke = new PaintBox('#stroke_color', 'stroke');
+
 			$('#stroke_width').val(curConfig.initStroke.width);
 			$('#group_opacity').val(curConfig.initOpacity * 100);
 			
 			// Use this SVG elem to test vectorEffect support
-			var test_el = svgdocbox.documentElement.firstChild;
+			var test_el = paintBox.fill.rect.cloneNode(false);
 			test_el.setAttribute('style','vector-effect:non-scaling-stroke');
-			var supportsNonSS = (test_el.style.vectorEffect == 'non-scaling-stroke');
+			var supportsNonSS = (test_el.style.vectorEffect === 'non-scaling-stroke');
 			test_el.removeAttribute('style');
-			
+			var svgdocbox = paintBox.fill.rect.ownerDocument;
 			// Use this to test support for blur element. Seems to work to test support in Webkit
 			var blur_test = svgdocbox.createElementNS('http://www.w3.org/2000/svg', 'feGaussianBlur');
 			if(typeof blur_test.stdDeviationX === "undefined") {
 				$('#tool_blur').hide();
 			}
 			$(blur_test).remove();
+			
+			// Test for zoom icon support
+			(function() {
+				var pre = '-' + ua_prefix.toLowerCase() + '-zoom-';
+				var zoom = pre + 'in';
+				workarea.css('cursor', zoom);
+				if(workarea.css('cursor') === zoom) {
+					zoomInIcon = zoom;
+					zoomOutIcon = pre + 'out';
+				}
+				workarea.css('cursor', 'auto');
+			}());
+
+			
 			
 			// Test for embedImage support (use timeout to not interfere with page load)
 			setTimeout(function() {
@@ -3155,30 +3383,24 @@
 			});
 			
 			$('#layer_new').click(function() {
-				var curNames = new Array(svgCanvas.getNumLayers());
-				for (var i = 0; i < curNames.length; ++i) { curNames[i] = svgCanvas.getLayer(i); }
+				var i = svgCanvas.getNumLayers();
+				do {
+					var uniqName = uiStrings.layer + " " + ++i;
+				} while(svgCanvas.hasLayer(uniqName));
 				
-				var j = (curNames.length+1);
-				var uniqName = uiStrings.layer + " " + j;
-				while ($.inArray(uniqName, curNames) != -1) {
-					j++;
-					uniqName = uiStrings.layer + " " + j;
-				}
 				$.prompt(uiStrings.enterUniqueLayerName,uniqName, function(newName) {
 					if (!newName) return;
-					if ($.inArray(newName, curNames) != -1) {
+					if (svgCanvas.hasLayer(newName)) {
 						$.alert(uiStrings.dupeLayerName);
 						return;
 					}
 					svgCanvas.createLayer(newName);
 					updateContextPanel();
 					populateLayers();
-					$('#layerlist tr.layer').removeClass("layersel");
-					$('#layerlist tr.layer:first').addClass("layersel");
 				});
 			});
 			
-			$('#layer_delete').click(function() {
+			function deleteLayer() {
 				if (svgCanvas.deleteCurrentLayer()) {
 					updateContextPanel();
 					populateLayers();
@@ -3188,32 +3410,48 @@
 					$('#layerlist tr.layer').removeClass("layersel");
 					$('#layerlist tr.layer:first').addClass("layersel");
 				}
-			});
+			}
 			
-			$('#layer_up').click(function() {
-				// find index position of selected option
-				var curIndex = $('#layerlist tr.layersel').prevAll().length;
-				if (curIndex > 0) {
-					var total = $('#layerlist tr.layer').length;
-					curIndex--;
+			function cloneLayer() {
+				var name = svgCanvas.getCurrentLayer() + ' copy';
+				
+				$.prompt(uiStrings.enterUniqueLayerName, name, function(newName) {
+					if (!newName) return;
+					if (svgCanvas.hasLayer(newName)) {
+						$.alert(uiStrings.dupeLayerName);
+						return;
+					}
+					svgCanvas.cloneLayer(newName);
+					updateContextPanel();
+					populateLayers();
+				});
+			}
+			
+			function mergeLayer() {
+				if($('#layerlist tr.layersel').index() == svgCanvas.getNumLayers()-1) return;
+				svgCanvas.mergeLayer();
+				updateContextPanel();
+				populateLayers();
+			}
+			
+			function moveLayer(pos) {
+				var curIndex = $('#layerlist tr.layersel').index();
+				var total = svgCanvas.getNumLayers();
+				if(curIndex > 0 || curIndex < total-1) {
+					curIndex += pos;
 					svgCanvas.setCurrentLayerPosition(total-curIndex-1);
 					populateLayers();
-					$('#layerlist tr.layer').removeClass("layersel");
-					$('#layerlist tr.layer:eq('+curIndex+')').addClass("layersel");
 				}
+			}
+		
+			$('#layer_delete').click(deleteLayer);
+			
+			$('#layer_up').click(function() {
+				moveLayer(-1);
 			});
 		
 			$('#layer_down').click(function() {
-				// find index position of selected option
-				var curIndex = $('#layerlist tr.layersel').prevAll().length;
-				var total = $('#layerlist tr.layer').length;
-				if (curIndex < total-1) {
-					curIndex++;
-					svgCanvas.setCurrentLayerPosition(total-curIndex-1);
-					populateLayers();
-					$('#layerlist tr.layer').removeClass("layersel");
-					$('#layerlist tr.layer:eq('+curIndex+')').addClass("layersel");
-				}
+				moveLayer(1);
 			});
 		
 			$('#layer_rename').click(function() {
@@ -3221,22 +3459,13 @@
 				var oldName = $('#layerlist tr.layersel td.layername').text();
 				$.prompt(uiStrings.enterNewLayerName,"", function(newName) {
 					if (!newName) return;
-					if (oldName == newName) {
-						$.alert(uiStrings.layerHasThatName);
-						return;
-					}
-			
-					var curNames = new Array(svgCanvas.getNumLayers());
-					for (var i = 0; i < curNames.length; ++i) { curNames[i] = svgCanvas.getLayer(i); }
-					if ($.inArray(newName, curNames) != -1) {
+					if (oldName == newName || svgCanvas.hasLayer(newName)) {
 						$.alert(uiStrings.layerHasThatName);
 						return;
 					}
 					
 					svgCanvas.renameCurrentLayer(newName);
 					populateLayers();
-					$('#layerlist tr.layer').removeClass("layersel");
-					$('#layerlist tr.layer:eq('+curIndex+')').addClass("layersel");
 				});
 			});
 			
@@ -3268,6 +3497,8 @@
 				workarea.css('right', parseInt(workarea.css('right'))+deltax);
 				sidepanels.css('width', parseInt(sidepanels.css('width'))+deltax);
 				layerpanel.css('width', parseInt(layerpanel.css('width'))+deltax);
+				var ruler_x = $('#ruler_x');
+				ruler_x.css('right', parseInt(ruler_x.css('right')) + deltax);
 			}
 			
 			$('#sidepanel_handle')
@@ -3299,9 +3530,11 @@
 				var deltax = (w > 2 || close ? 2 : SIDEPANEL_OPENWIDTH) - w;
 				var sidepanels = $('#sidepanels');
 				var layerpanel = $('#layerpanel');
-				workarea.css('right', parseInt(workarea.css('right'))+deltax);
-				sidepanels.css('width', parseInt(sidepanels.css('width'))+deltax);
-				layerpanel.css('width', parseInt(layerpanel.css('width'))+deltax);
+				var ruler_x = $('#ruler_x');
+				workarea.css('right', parseInt(workarea.css('right')) + deltax);
+				sidepanels.css('width', parseInt(sidepanels.css('width')) + deltax);
+				layerpanel.css('width', parseInt(layerpanel.css('width')) + deltax);
+				ruler_x.css('right', parseInt(ruler_x.css('right')) + deltax);
 			};
 			
 			// this function highlights the layer passed in (by fading out the other layers)
@@ -3358,7 +3591,7 @@
 				}
 				// handle selection of layer
 				$('#layerlist td.layername')
-					.click(function(evt){
+					.mouseup(function(evt){
 						$('#layerlist tr.layer').removeClass("layersel");
 						var row = $(this.parentNode);
 						row.addClass("layersel");
@@ -3499,17 +3732,19 @@
 					{sel:'#tool_text', fn: clickText, evt: 'click', key: 7},
 					{sel:'#tool_image', fn: clickImage, evt: 'mouseup', key: 8},
 					{sel:'#tool_zoom', fn: clickZoom, evt: 'mouseup', key: 9},
-					{sel:'#tool_clear', fn: clickClear, evt: 'mouseup', key: [modKey+'N', true]},
-					{sel:'#tool_save', fn: function() { editingsource?saveSourceEditor():clickSave()}, evt: 'mouseup', key: [modKey+'S', true]},
+					{sel:'#tool_clear', fn: clickClear, evt: 'mouseup', key: ['N', true]},
+					{sel:'#tool_save', fn: function() { editingsource?saveSourceEditor():clickSave()}, evt: 'mouseup', key: ['S', true]},
 					{sel:'#tool_export', fn: clickExport, evt: 'mouseup'},
-					{sel:'#tool_open', fn: clickOpen, evt: 'mouseup', key: [modKey+'O', true]},
+					{sel:'#tool_open', fn: clickOpen, evt: 'mouseup', key: ['O', true]},
 					{sel:'#tool_import', fn: clickImport, evt: 'mouseup'},
 					{sel:'#tool_source', fn: showSourceEditor, evt: 'click', key: ['U', true]},
 					{sel:'#tool_wireframe', fn: clickWireframe, evt: 'click', key: ['F', true]},
-					{sel:'#tool_source_cancel,#svg_source_overlay,#tool_docprops_cancel', fn: cancelOverlays, evt: 'click', key: ['esc', false, false], hidekey: true},
+					{sel:'#tool_source_cancel,#svg_source_overlay,#tool_docprops_cancel,#tool_prefs_cancel', fn: cancelOverlays, evt: 'click', key: ['esc', false, false], hidekey: true},
 					{sel:'#tool_source_save', fn: saveSourceEditor, evt: 'click'},
 					{sel:'#tool_docprops_save', fn: saveDocProperties, evt: 'click'},
-					{sel:'#tool_docprops', fn: showDocProperties, evt: 'mouseup', key: [modKey+'P', true]},
+					{sel:'#tool_docprops', fn: showDocProperties, evt: 'mouseup', key: ['P', true]},
+					{sel:'#tool_prefs_save', fn: savePreferences, evt: 'click'},
+					{sel:'#tool_prefs_option', fn: function() {showPreferences();return false}, evt: 'mouseup', key: ['I', true]},
 					{sel:'#tool_delete,#tool_delete_multi', fn: deleteSelected, evt: 'click', key: ['del/backspace', true]},
 					{sel:'#tool_reorient', fn: reorientPath, evt: 'click'},
 					{sel:'#tool_node_link', fn: linkControlPoints, evt: 'click'},
@@ -3517,13 +3752,13 @@
 					{sel:'#tool_node_delete', fn: deletePathNode, evt: 'click'},
 					{sel:'#tool_openclose_path', fn: opencloseSubPath, evt: 'click'},
 					{sel:'#tool_add_subpath', fn: addSubPath, evt: 'click'},
-					{sel:'#tool_move_top', fn: moveToTopSelected, evt: 'click', key: 'shift+up'},
-					{sel:'#tool_move_bottom', fn: moveToBottomSelected, evt: 'click', key: 'shift+down'},
+					{sel:'#tool_move_top', fn: moveToTopSelected, evt: 'click', key: 'ctrl+shift+]'},
+					{sel:'#tool_move_bottom', fn: moveToBottomSelected, evt: 'click', key: 'ctrl+shift+['},
 					{sel:'#tool_topath', fn: convertToPath, evt: 'click'},
-					{sel:'#tool_undo', fn: clickUndo, evt: 'click', key: [modKey+'Z', true]},
-					{sel:'#tool_redo', fn: clickRedo, evt: 'click', key: [modKey+'Y', true]},
-					{sel:'#tool_clone,#tool_clone_multi', fn: clickClone, evt: 'click', key: [modKey+'C', true]},
-					{sel:'#tool_group', fn: clickGroup, evt: 'click', key: [modKey+'G', true]},
+					{sel:'#tool_undo', fn: clickUndo, evt: 'click', key: ['Z', true]},
+					{sel:'#tool_redo', fn: clickRedo, evt: 'click', key: ['Y', true]},
+					{sel:'#tool_clone,#tool_clone_multi', fn: clickClone, evt: 'click', key: ['C', true]},
+					{sel:'#tool_group', fn: clickGroup, evt: 'click', key: ['G', true]},
 					{sel:'#tool_ungroup', fn: clickGroup, evt: 'click'},
 					{sel:'#tool_unlink_use', fn: clickGroup, evt: 'click'},
 					{sel:'[id^=tool_align]', fn: clickAlign, evt: 'click'},
@@ -3532,19 +3767,28 @@
 		// 			{sel:'#tools_ellipse_show', fn: clickEllipse, evt: 'click'},
 					{sel:'#tool_bold', fn: clickBold, evt: 'mousedown'},
 					{sel:'#tool_italic', fn: clickItalic, evt: 'mousedown'},
-					{sel:'#sidepanel_handle', fn: toggleSidePanel, key: [modKey+'X']},
+					{sel:'#sidepanel_handle', fn: toggleSidePanel, key: ['X']},
+					{sel:'#copy_save_done', fn: cancelOverlays, evt: 'click'},
 					
 					// Shortcuts not associated with buttons
-					{key: 'shift+left', fn: function(){rotateSelected(0)}},
-					{key: 'shift+right', fn: function(){rotateSelected(1)}},
+					{key: 'ctrl+left', fn: function(){rotateSelected(0,1)}},
+					{key: 'ctrl+right', fn: function(){rotateSelected(1,1)}},
+					{key: 'ctrl+shift+left', fn: function(){rotateSelected(0,5)}},					
+					{key: 'ctrl+shift+right', fn: function(){rotateSelected(1,5)}},
 					{key: 'shift+O', fn: selectPrev},
 					{key: 'shift+P', fn: selectNext},
-					{key: ['ctrl+up', true], fn: function(){zoomImage(2);}},
-					{key: ['ctrl+down', true], fn: function(){zoomImage(.5);}},
+					{key: [modKey+'up', true], fn: function(){zoomImage(2);}},
+					{key: [modKey+'down', true], fn: function(){zoomImage(.5);}},
+					{key: [modKey+']', true], fn: function(){moveUpDownSelected('Up');}},
+                                        {key: [modKey+'[', true], fn: function(){moveUpDownSelected('Down');}},
 					{key: ['up', true], fn: function(){moveSelected(0,-1);}},
 					{key: ['down', true], fn: function(){moveSelected(0,1);}},
 					{key: ['left', true], fn: function(){moveSelected(-1,0);}},
 					{key: ['right', true], fn: function(){moveSelected(1,0);}},
+					{key: 'shift+up', fn: function(){moveSelected(0,-10)}},
+					{key: 'shift+down', fn: function(){moveSelected(0,10)}},
+					{key: 'shift+left', fn: function(){moveSelected(-10,0)}},
+					{key: 'shift+right', fn: function(){moveSelected(10,0)}},
 					{key: 'A', fn: function(){svgCanvas.selectAllInCurrentLayer();}}
 				];
 				
@@ -3631,6 +3875,18 @@
 							function(evt) {$(this).change();evt.preventDefault();}
 						);
 						
+						$(window).bind('keydown', 'tab', function(e) {
+							if(ui_context === 'canvas') {
+								e.preventDefault();
+								selectNext();
+							}
+						}).bind('keydown', 'shift+tab', function(e) {
+							if(ui_context === 'canvas') {
+								e.preventDefault();
+								selectPrev();
+							}
+						});
+						
 						$('#tool_zoom').dblclick(dblclickZoom);
 					},
 					setTitles: function() {
@@ -3695,6 +3951,18 @@
 				if(curConfig.showlayers) {
 					toggleSidePanel();
 				}
+				
+				if(curConfig.gridSnapping) {
+					$('#grid_snapping_on')[0].checked = true;
+				}
+
+				if(curConfig.baseUnit) {
+					$('#base_unit').val(curConfig.baseUnit);
+				}
+				
+				if(curConfig.snappingStep) {
+					$('#grid_snapping_step').val(curConfig.snappingStep);
+				}
 			});
 			
 			$('#rect_rx').SpinButton({ min: 0, max: 1000, step: 1, callback: changeRectRadius });
@@ -3704,6 +3972,94 @@
 			$('#group_opacity').SpinButton({ step: 5, min: 0, max: 100, callback: changeOpacity });
 			$('#blur').SpinButton({ step: .1, min: 0, max: 10, callback: changeBlur });
 			$('#zoom').SpinButton({ min: 0.001, max: 10000, step: 50, stepfunc: stepZoom, callback: changeZoom });
+			
+			$("#workarea").contextMenu({
+					menu: 'cmenu_canvas',
+					inSpeed: 0
+				},
+				function(action, el, pos) {
+					switch ( action ) {
+						case 'delete':
+							deleteSelected();
+							break;
+						case 'cut':
+							cutSelected();
+							break;
+						case 'copy':
+							copySelected();
+							break;
+						case 'paste':
+							svgCanvas.pasteElements();
+							break;
+						case 'paste_in_place':
+							svgCanvas.pasteElements('in_place');
+							break;
+						case 'group':
+							svgCanvas.groupSelectedElements();
+							break;
+						case 'ungroup':         
+							svgCanvas.ungroupSelectedElement();  
+							break;
+                                                case 'move_front':
+                                                        moveToTopSelected();
+                                                        break;
+                                                case 'move_up':
+                                                        moveUpDownSelected('Up');
+                                                        break;
+						case 'move_down':
+							moveUpDownSelected('Down');
+							break;
+						case 'move_back':
+							moveToBottomSelected();
+							break;
+
+					}
+					
+					if(svgCanvas.clipBoard.length) {
+						canv_menu.enableContextMenuItems('#paste,#paste_in_place');
+					}
+			});
+			
+			var lmenu_func = function(action, el, pos) {
+				switch ( action ) {
+					case 'dupe':
+						cloneLayer();
+						break;
+					case 'delete':
+						deleteLayer();
+						break;
+					case 'merge_down':
+						mergeLayer();
+						break;
+					case 'merge_all':
+						svgCanvas.mergeAllLayers();
+						updateContextPanel();
+						populateLayers();
+						break;
+				}
+			}
+			
+			$("#layerlist").contextMenu({
+					menu: 'cmenu_layers',
+					inSpeed: 0
+				},
+				lmenu_func
+			);
+			
+			$("#layer_moreopts").contextMenu({
+					menu: 'cmenu_layers',
+					inSpeed: 0,
+					allowLeft: true
+				},
+				lmenu_func
+			);
+			
+			$('.contextMenu li').mousedown(function(ev) {
+				ev.preventDefault();
+			})
+			
+			$('#cmenu_canvas li').disableContextMenu();
+			canv_menu.enableContextMenuItems('#delete,#cut,#copy');
 			
 			window.onbeforeunload = function() { 
 				// Suppress warning if page is empty 
@@ -3740,7 +4096,7 @@
 						if(f.files.length==1) {
 							var reader = new FileReader();
 							reader.onloadend = function(e) {
-								svgCanvas.setSvgString(e.target.result);
+								loadSvgString(e.target.result);
 								updateCanvas();
 							};
 							reader.readAsText(f.files[0]);
@@ -3763,6 +4119,7 @@
 			}
 			
 			var updateCanvas = Editor.updateCanvas = function(center, new_ctr) {
+		
 				var w = workarea.width(), h = workarea.height();
 				var w_orig = w, h_orig = h;
 				var zoom = svgCanvas.getZoom();
@@ -3829,13 +4186,124 @@
 					w_area[0].scrollLeft = new_ctr.x - w_orig/2;
 					w_area[0].scrollTop = new_ctr.y - h_orig/2;
 				}
+				
+				if(curConfig.showRulers) {
+					updateRulers(cnvs, zoom);
+					workarea.scroll();
+				}
+			}
+			
+			// Make [1,2,5] array
+			var r_intervals = [];
+			for(var i = .1; i < 1E5; i *= 10) {
+				r_intervals.push(1 * i);
+				r_intervals.push(2 * i);
+				r_intervals.push(5 * i);
+			}
+			
+			function updateRulers(scanvas, zoom) {
+				if(!zoom) zoom = svgCanvas.getZoom();
+				if(!scanvas) scanvas = $("#svgcanvas");
+				
+				var c_elem = svgCanvas.getContentElem();
+				
+				var units = svgCanvas.getUnits();
+				var unit = units[curConfig.baseUnit]; // 1 = 1px
+			
+				for(var d = 0; d < 2; d++) {
+					var is_x = (d === 0);
+					var dim = is_x ? 'x' : 'y';
+					var lentype = is_x?'width':'height';
+					
+					var content_d = c_elem.getAttribute(dim)-0;
+					
+					var hcanv = $('#ruler_' + dim + ' canvas')[0];
+					// Set the canvas size to the width of the container
+					var len = hcanv[lentype] = scanvas[lentype]();
+					var ctx = hcanv.getContext("2d");
+					
+					var u_multi = unit * zoom;
+					
+					// Calculate the main number interval
+					var raw_m = 50 / u_multi;
+					var multi = 1;
+					for(var i = 0; i < r_intervals.length; i++) {
+						var num = r_intervals[i];
+						multi = num;
+						if(raw_m <= num) {
+							break;
+						}
+					}
+					
+					var big_int = multi * u_multi;
+
+					ctx.font = "9px sans-serif";
+					
+					var ruler_d = ((content_d / u_multi) % multi) * u_multi;
+					
+					for (; ruler_d < len; ruler_d += big_int) {
+						var real_d = Math.round((ruler_d) - content_d );
+	
+						var cur_d = Math.round(ruler_d) + .5;
+						if(is_x) {
+							ctx.moveTo(cur_d, 15);
+							ctx.lineTo(cur_d, 0);
+						} else {
+							ctx.moveTo(15, cur_d);
+							ctx.lineTo(0, cur_d);
+						}
+	
+	
+						var num = real_d / u_multi;
+						if(multi >= 1) {
+							label = Math.round(num);
+						} else {
+							var decs = (multi+'').split('.')[1].length;
+							label = num.toFixed(decs)-0;
+						}
+						
+						// Do anything special for negative numbers?
+// 						var is_neg = label < 0;
+// 						real_d2 = Math.abs(real_d2);
+						
+						// Change 1000s to Ks
+						if(label !== 0 && label !== 1000 && label % 1000 === 0) {
+							label = (label / 1000) + 'K';
+						}
+						
+						if(is_x) {
+							ctx.fillText(label, ruler_d+2, 8);
+						} else {
+							var str = (label+'').split('');
+							for(var i = 0; i < str.length; i++) {
+								ctx.fillText(str[i], 1, (ruler_d+9) + i*9);
+							}
+						}
+						
+						var part = big_int / 10;
+						for(var i = 1; i < 10; i++) {
+							var sub_d = Math.round(ruler_d + part * i) + .5;
+							var line_num = (i % 2)?12:10;
+							if(is_x) {
+								ctx.moveTo(sub_d, 15);
+								ctx.lineTo(sub_d, line_num);
+							} else {
+								ctx.moveTo(15, sub_d);
+								ctx.lineTo(line_num ,sub_d);
+							}
+						}
+					}
+					
+					ctx.strokeStyle = "#000";
+					ctx.stroke();
+				}
 			}
 		
 // 			$(function() {
 				updateCanvas(true);
 // 			});
 			
-		//	var revnums = "svg-editor.js ($Rev: 1659 $) ";
+		//	var revnums = "svg-editor.js ($Rev: 1802 $) ";
 		//	revnums += svgCanvas.getVersion();
 		//	$('#copyright')[0].setAttribute("title", revnums);
 		
@@ -3848,48 +4316,47 @@
 // 			var lang = ('lang' in curPrefs) ? curPrefs.lang : null;
 			Editor.putLocale(null, good_langs);
 			
-			// Not sure what this was being used for...commented out until known.
-			// The "message" event listener was interfering with image lib responder
-// 			try{
-// 				json_encode = function(obj){
-// 			  //simple partial JSON encoder implementation
-// 			  if(window.JSON && JSON.stringify) return JSON.stringify(obj);
-// 			  var enc = arguments.callee; //for purposes of recursion
-// 			  if(typeof obj == "boolean" || typeof obj == "number"){
-// 				  return obj+'' //should work...
-// 			  }else if(typeof obj == "string"){
-// 				//a large portion of this is stolen from Douglas Crockford's json2.js
-// 				return '"'+
-// 					  obj.replace(
-// 						/[\\\"\x00-\x1f\x7f-\x9f\u00ad\u0600-\u0604\u070f\u17b4\u17b5\u200c-\u200f\u2028-\u202f\u2060-\u206f\ufeff\ufff0-\uffff]/g
-// 					  , function (a) {
-// 						return '\\u' + ('0000' + a.charCodeAt(0).toString(16)).slice(-4);
-// 					  })
-// 					  +'"'; //note that this isn't quite as purtyful as the usualness
-// 			  }else if(obj.length){ //simple hackish test for arrayish-ness
-// 				for(var i = 0; i < obj.length; i++){
-// 				  obj[i] = enc(obj[i]); //encode every sub-thingy on top
-// 				}
-// 				return "["+obj.join(",")+"]";
-// 			  }else{
-// 				var pairs = []; //pairs will be stored here
-// 				for(var k in obj){ //loop through thingys
-// 				  pairs.push(enc(k)+":"+enc(obj[k])); //key: value
-// 				}
-// 				return "{"+pairs.join(",")+"}" //wrap in the braces
-// 			  }
-// 			}
-// 			  window.addEventListener("message", function(e){
-// 				var cbid = parseInt(e.data.substr(0, e.data.indexOf(";")));
-// 				try{
-// 				e.source.postMessage("SVGe"+cbid+";"+json_encode(eval(e.data)), e.origin);
-// 			  }catch(err){
-// 				e.source.postMessage("SVGe"+cbid+";error:"+err.message, e.origin);
-// 			  }
-// 			}, false)
-// 			}catch(err){
-// 			  window.embed_error = err;
-// 			}
+			// Callback handler for embedapi.js
+ 			try{
+ 				json_encode = function(obj){
+ 			  //simple partial JSON encoder implementation
+ 			  if(window.JSON && JSON.stringify) return JSON.stringify(obj);
+ 			  var enc = arguments.callee; //for purposes of recursion
+ 			  if(typeof obj == "boolean" || typeof obj == "number"){
+ 				  return obj+'' //should work...
+ 			  }else if(typeof obj == "string"){
+ 				//a large portion of this is stolen from Douglas Crockford's json2.js
+ 				return '"'+
+ 					  obj.replace(
+ 						/[\\\"\x00-\x1f\x7f-\x9f\u00ad\u0600-\u0604\u070f\u17b4\u17b5\u200c-\u200f\u2028-\u202f\u2060-\u206f\ufeff\ufff0-\uffff]/g
+ 					  , function (a) {
+ 						return '\\u' + ('0000' + a.charCodeAt(0).toString(16)).slice(-4);
+ 					  })
+ 					  +'"'; //note that this isn't quite as purtyful as the usualness
+ 			  }else if(obj.length){ //simple hackish test for arrayish-ness
+ 				for(var i = 0; i < obj.length; i++){
+ 				  obj[i] = enc(obj[i]); //encode every sub-thingy on top
+ 				}
+ 				return "["+obj.join(",")+"]";
+ 			  }else{
+ 				var pairs = []; //pairs will be stored here
+ 				for(var k in obj){ //loop through thingys
+ 				  pairs.push(enc(k)+":"+enc(obj[k])); //key: value
+ 				}
+ 				return "{"+pairs.join(",")+"}" //wrap in the braces
+ 			  }
+ 			}
+ 			  window.addEventListener("message", function(e){
+ 				var cbid = parseInt(e.data.substr(0, e.data.indexOf(";")));
+ 				try{
+					e.source.postMessage("SVGe"+cbid+";"+json_encode(eval(e.data)), "*");
+ 			  }catch(err){					
+					e.source.postMessage("SVGe"+cbid+";error:"+err.message, "*");
+ 			  }
+ 			}, false)
+ 			}catch(err){
+ 			  window.embed_error = err;
+			}
 			
 		
 		
@@ -3945,6 +4412,18 @@
 		
 		var callbacks = [];
 		
+		function loadSvgString(str, callback) {
+			var success = svgCanvas.setSvgString(str) !== false;
+			callback = callback || $.noop;
+			if(success) {
+				callback(true);
+			} else {
+				$.alert('Error: Unable to load SVG data', function() {
+					callback(false);
+				});
+			}
+		}
+		
 		Editor.ready = function(cb) {
 			if(!is_ready) {
 				callbacks.push(cb);
@@ -3962,22 +4441,29 @@
 		
 		Editor.loadFromString = function(str) {
 			Editor.ready(function() {
-				svgCanvas.setSvgString(str);
+				loadSvgString(str);
 			});
 		};
 		
-		Editor.loadFromURL = function(url, cache) {
+		Editor.loadFromURL = function(url, opts) {
+			if(!opts) opts = {};
+
+			var cache = opts.cache;
+			var cb = opts.callback;
+		
 			Editor.ready(function() {
 				$.ajax({
 					'url': url,
 					'dataType': 'text',
 					cache: !!cache,
-					success: svgCanvas.setSvgString,
+					success: function(str) {
+						loadSvgString(str, cb);
+					},
 					error: function(xhr, stat, err) {
-						if(xhr.responseText) {
-							svgCanvas.setSvgString(xhr.responseText);
+						if(xhr.status != 404 && xhr.responseText) {
+							loadSvgString(xhr.responseText, cb);
 						} else {
-							$.alert("Unable to load from URL. Error: \n"+err+'');
+							$.alert("Unable to load from URL. Error: \n"+err+'', cb);
 						}
 					}
 				});
@@ -3986,17 +4472,19 @@
 		
 		Editor.loadFromDataURI = function(str) {
 			Editor.ready(function() {
-				svgCanvas.setSvgString(str);
 				var pre = 'data:image/svg+xml;base64,';
 				var src = str.substring(pre.length);
-				svgCanvas.setSvgString(Utils.decode64(src));
+				loadSvgString(svgCanvas.Utils.decode64(src));
 			});
 		};
 		
 		Editor.addExtension = function() {
 			var args = arguments;
+			
+			// Note that we don't want this on Editor.ready since some extensions
+			// may want to run before then (like server_opensave).
 			$(function() {
-				svgCanvas.addExtension.apply(this, args);
+				if(svgCanvas) svgCanvas.addExtension.apply(this, args);
 			});
 		};
 
